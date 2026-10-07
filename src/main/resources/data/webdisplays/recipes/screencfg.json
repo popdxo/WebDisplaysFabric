@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "L  ",
+    "IPI",
+    "IRI"
+  ],
+  "key": {
+    "L": { "item": "minecraft:lightning_rod" },
+    "I": { "item": "minecraft:iron_ingot" },
+    "P": { "item": "minecraft:glass_pane" },
+    "R": { "item": "minecraft:redstone" }
+  },
+  "result": {
+    "item": "webdisplays:screencfg",
+    "count": 1
+  }
+}

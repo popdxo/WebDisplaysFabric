@@ -72,7 +72,7 @@ public class ScreenCursorTracker {
 
             for (int i = 0; i < screen.screenCount(); i++) {
                 ScreenData data = screen.getScreen(i);
-                if (data == null || data.browser == null) continue;
+                if (data == null) continue;
 
                 BlockPos bp = screen.getBlockPos();
                 double bx = bp.getX(), by = bp.getY(), bz = bp.getZ();
@@ -137,10 +137,9 @@ public class ScreenCursorTracker {
 
         if (best != null) {
             long now = System.currentTimeMillis();
-            if (currentCursor == null ||
-                !currentCursor.pos.equals(best.pos) ||
-                currentCursor.pixelX != best.pixelX ||
-                currentCursor.pixelY != best.pixelY) {
+            if (best.screenData.browser != null && (currentCursor == null ||
+                currentCursor.screenData != best.screenData ||
+                currentCursor.pixelX != best.pixelX || currentCursor.pixelY != best.pixelY)) {
                 if (now - lastMoveTime > 16) {
                     MCEFHelper.sendMouseMove(best.screenData.browser, best.pixelX, best.pixelY, false);
                     lastMoveTime = now;
@@ -161,7 +160,7 @@ public class ScreenCursorTracker {
     public static void handleLeftClick(Minecraft mc) {
         if (mc.level == null || mc.player == null) return;
         if (!cursorVisible) return;
-        if (currentCursor == null || currentCursor.screenData == null) return;
+        if (currentCursor == null || currentCursor.screenData == null || currentCursor.screenData.browser == null) return;
 
         boolean isDown = mc.options.keyAttack.isDown();
         
@@ -206,7 +205,7 @@ public class ScreenCursorTracker {
 
     public static void handleScroll(double delta) {
         if (!cursorVisible) return;
-        if (currentCursor == null || currentCursor.screenData == null) return;
+        if (currentCursor == null || currentCursor.screenData == null || currentCursor.screenData.browser == null) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
 

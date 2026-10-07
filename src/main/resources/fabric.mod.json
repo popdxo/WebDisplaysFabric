@@ -2,7 +2,7 @@
 	"schemaVersion": 1,
 	"id": "webdisplays",
 	"version": "${version}",
-	"name": "WebDisplays",
+	"name": "BAD AI webdisplays",
 	"description": "Adds in-game web browser screens powered by MCEF (Minecraft Chromium Embedded Framework)",
 	"authors": [
 		"LX",
@@ -10,11 +10,12 @@
 		"Mysticpasta1",
 		"montoyo",
 		"WaterPicker",
-		"LGiantLuigi4X"
+		"LGiantLuigi4X",
+		"popdxo"
 	],
 	"contact": {
-		"homepage": "https://github.com/CinemaMod/webdisplays",
-		"sources": "https://github.com/CinemaMod/webdisplays"
+		"homepage": "https://github.com/popdxo/WebDisplaysFabric",
+		"sources": "https://github.com/popdxo/WebDisplaysFabric"
 	},
 	"license": "MIT",
 	"icon": "assets/webdisplays/icon.png",

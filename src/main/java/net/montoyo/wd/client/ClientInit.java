@@ -46,6 +46,7 @@ public class ClientInit implements ClientModInitializer {
     private static boolean wasZoomInDown;
     private static boolean wasZoomOutDown;
     private static boolean wasZoomResetDown;
+    private static boolean wasScreenOpen;
 
     public static boolean isMCEFRenderingEnabled() {
         return mcefRenderingEnabled;
@@ -100,6 +101,19 @@ public class ClientInit implements ClientModInitializer {
         //     org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_UNPACK_SKIP_ROWS, 0);
         //     org.lwjgl.opengl.GL11.glPixelStorei(org.lwjgl.opengl.GL11.GL_UNPACK_SKIP_PIXELS, 0);
         // });
+
+        // Maintain cursor state across GUI transitions and refresh as soon as gameplay resumes.
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.level == null || client.player == null) {
+                ScreenCursorTracker.clear();
+                wasScreenOpen = false;
+                return;
+            }
+            boolean screenOpen = client.screen != null;
+            if (wasScreenOpen && !screenOpen) ScreenCursorTracker.restart(client);
+            wasScreenOpen = screenOpen;
+            if (!screenOpen) ScreenCursorTracker.update(client);
+        });
 
         // Periodically retry browser creation for screens that were created before MCEF initialized
         // Also detect page navigation and re-inject window.open override (throttled to 1/sec)
@@ -280,10 +294,13 @@ public class ClientInit implements ClientModInitializer {
         // Activate a linked keyboard from the display surface before display clicks are consumed.
 
         // While the display cursor is active, clicks belong to the web page.
-        AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) ->
-                player.getItemInHand(hand).getItem() == WDRegistries.LINKER
-                        || !ScreenCursorTracker.isScreenFocused()
-                        ? InteractionResult.PASS : InteractionResult.FAIL);
+        AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+            if (player.getItemInHand(hand).getItem() == WDRegistries.LINKER || world.isClientSide()) {
+                if (world.isClientSide()) ScreenCursorTracker.update(Minecraft.getInstance());
+            }
+            if (player.getItemInHand(hand).getItem() == WDRegistries.LINKER) return InteractionResult.PASS;
+            return ScreenCursorTracker.isScreenFocused() ? InteractionResult.FAIL : InteractionResult.PASS;
+        });
 
         // Prevent right-clicking blocks behind/under the active display surface. Keep the
         // configurator available on the actual display block itself.
@@ -291,6 +308,7 @@ public class ClientInit implements ClientModInitializer {
         // Open config GUI when using configurator on screen (client-side only)
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!world.isClientSide()) return InteractionResult.PASS;
+            ScreenCursorTracker.update(Minecraft.getInstance());
 
             if (player.getItemInHand(hand).getItem() == WDRegistries.LINKER) return InteractionResult.PASS;
             BlockEntity be = world.getBlockEntity(hitResult.getBlockPos());

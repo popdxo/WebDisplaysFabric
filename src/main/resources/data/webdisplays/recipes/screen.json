@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "PPP",
+    "ILI",
+    "IRI"
+  ],
+  "key": {
+    "P": { "item": "minecraft:glass_pane" },
+    "I": { "item": "minecraft:iron_ingot" },
+    "R": { "item": "minecraft:redstone" },
+    "L": { "item": "minecraft:redstone_lamp" }
+  },
+  "result": {
+    "item": "webdisplays:screen",
+    "count": 1
+  }
+}

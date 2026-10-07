@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "L",
+    "R",
+    "I"
+  ],
+  "key": {
+    "L": { "item": "minecraft:lightning_rod" },
+    "R": { "item": "minecraft:redstone" },
+    "I": { "item": "minecraft:iron_ingot" }
+  },
+  "result": {
+    "item": "webdisplays:linker",
+    "count": 1
+  }
+}

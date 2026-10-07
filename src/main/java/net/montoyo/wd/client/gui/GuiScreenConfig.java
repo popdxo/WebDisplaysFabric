@@ -26,6 +26,7 @@ public class GuiScreenConfig extends Screen {
     private EditBox heightInput;
     private EditBox resolutionWidthInput;
     private EditBox resolutionHeightInput;
+    private String fitError;
 
     public GuiScreenConfig(BlockPos pos, BlockSide side, boolean isNew) {
         super(Component.literal("Screen Settings"));
@@ -37,7 +38,7 @@ public class GuiScreenConfig extends Screen {
     @Override
     protected void init() {
         int cx = width / 2;
-        int top = Math.max(12, height / 2 - (isNew ? 70 : 118));
+        int top = Math.max(12, height / 2 - (isNew ? 100 : 148));
         net.minecraft.world.level.block.entity.BlockEntity be = Minecraft.getInstance().level.getBlockEntity(blockPos);
         if (be instanceof ScreenBlockEntity sbe) screen = sbe.getScreen(side);
         if (!isNew && screen == null) {
@@ -46,56 +47,60 @@ public class GuiScreenConfig extends Screen {
         }
 
         addRenderableWidget(Button.builder(Component.literal("×"), b -> onClose())
-                .bounds(cx + 105, top, 20, 20).build());
+                .bounds(cx + 95, top, 20, 20).build());
 
-        int row = top + 29;
-        widthInput = numberField(cx - 65, row, 60, screen != null ? screen.size.x : 2, 3);
+        int row = top + 24;
+        if (!isNew) {
+            addRenderableWidget(Button.builder(Component.literal("Size: " + (screen.autoSize ? "Auto" : "Manual")),
+                    this::toggleSizeMode).bounds(cx - 95, row, 190, 20).build());
+            row += 23;
+        }
+
+        widthInput = numberField(cx - 94, row, 92, screen != null ? screen.size.x : 2, 3);
         addRenderableWidget(widthInput);
-        heightInput = numberField(cx + 5, row, 60, screen != null ? screen.size.y : 2, 3);
+        heightInput = numberField(cx + 3, row, 91, screen != null ? screen.size.y : 2, 3);
         addRenderableWidget(heightInput);
 
         if (!isNew) {
-            row += 31;
+            row += 35;
             addRenderableWidget(Button.builder(Component.literal("Resolution: " + (screen.autoResolution ? "Auto" : "Manual")),
                     this::toggleAutoResolution).bounds(cx - 95, row, 190, 20).build());
-            row += 25;
-            resolutionWidthInput = numberField(cx - 95, row, 85, screen.resolution.x, 5);
-            resolutionHeightInput = numberField(cx + 10, row, 85, screen.resolution.y, 5);
+            row += 23;
+            resolutionWidthInput = numberField(cx - 94, row, 92, screen.resolution.x, 5);
+            resolutionHeightInput = numberField(cx + 3, row, 91, screen.resolution.y, 5);
             resolutionWidthInput.active = !screen.autoResolution;
             resolutionHeightInput.active = false;
             addRenderableWidget(resolutionWidthInput);
             addRenderableWidget(resolutionHeightInput);
 
-            row += 29;
+            row += 23;
             addRenderableWidget(Button.builder(Component.literal("Apply"), b -> applySettings())
-                    .bounds(cx - 95, row, 90, 20).build());
+                    .bounds(cx - 95, row, 190, 20).build());
+
+            row += 23;
             addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.seturl"),
                     b -> Minecraft.getInstance().setScreen(new GuiSetURL(blockPos, side)))
-                    .bounds(cx + 5, row, 90, 20).build());
-
-            row += 28;
-            addRenderableWidget(Button.builder(Component.literal("Size: " + (screen.autoSize ? "Auto" : "Manual")),
-                    this::toggleSizeMode).bounds(cx - 95, row, 90, 20).build());
+                    .bounds(cx - 95, row, 93, 20).build());
             addRenderableWidget(Button.builder(Component.literal("Remove Display"), b -> removeDisplay())
-                    .bounds(cx + 5, row, 90, 20).build());
+                    .bounds(cx + 1, row, 94, 20).build());
 
-            row += 28;
+            row += 23;
             addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot0"),
-                    b -> setRotation(Rotation.ROT_0)).bounds(cx - 95, row, 43, 20).build());
+                    b -> setRotation(Rotation.ROT_0)).bounds(cx - 95, row, 45, 20).build());
             addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot90"),
-                    b -> setRotation(Rotation.ROT_90)).bounds(cx - 49, row, 43, 20).build());
+                    b -> setRotation(Rotation.ROT_90)).bounds(cx - 47, row, 45, 20).build());
             addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot180"),
-                    b -> setRotation(Rotation.ROT_180)).bounds(cx - 3, row, 43, 20).build());
+                    b -> setRotation(Rotation.ROT_180)).bounds(cx + 1, row, 45, 20).build());
             addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot270"),
-                    b -> setRotation(Rotation.ROT_270)).bounds(cx + 43, row, 43, 20).build());
+                    b -> setRotation(Rotation.ROT_270)).bounds(cx + 49, row, 46, 20).build());
 
-            row += 28;
+            row += 23;
             addRenderableWidget(Button.builder(Component.literal("−"), b -> adjustZoom(-0.1))
-                    .bounds(cx - 65, row, 30, 20).build());
+                    .bounds(cx - 95, row, 45, 20).build());
             addRenderableWidget(Button.builder(Component.literal("100%"), b -> resetZoom())
-                    .bounds(cx - 30, row, 60, 20).build());
+                    .bounds(cx - 47, row, 94, 20).build());
             addRenderableWidget(Button.builder(Component.literal("+"), b -> adjustZoom(0.1))
-                    .bounds(cx + 35, row, 30, 20).build());
+                    .bounds(cx + 49, row, 46, 20).build());
         } else {
             row += 33;
             addRenderableWidget(Button.builder(Component.literal("Create"), b -> createScreen())
@@ -167,10 +172,7 @@ public class GuiScreenConfig extends Screen {
     }
 
     private void showFitError() {
-        if (Minecraft.getInstance().player != null) {
-            Minecraft.getInstance().player.displayClientMessage(Component.literal(
-                    "Screen must fit on free screen blocks and cannot overlap another display."), true);
-        }
+        fitError = "Screen must fit on free screen blocks and cannot overlap another display.";
     }
 
     private void toggleAutoResolution(Button button) {
@@ -230,20 +232,21 @@ public class GuiScreenConfig extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics);
         int cx = width / 2;
-        int top = Math.max(12, height / 2 - (isNew ? 70 : 118));
-        int panelBottom = Math.min(height - 10, height / 2 + (isNew ? 48 : 128));
-        graphics.fill(cx - 118, top - 10, cx + 118, panelBottom, 0xD820242A);
+        int top = Math.max(12, height / 2 - (isNew ? 100 : 148));
         graphics.drawCenteredString(font, "Display Configuration", cx, top - 2, 0xFFFFFF);
         graphics.drawString(font, "Blocks W × H", cx - 95, top + 13, 0xBBBBBB);
         if (!isNew) {
-            graphics.drawString(font, "Resolution W × H (fixed ratio)", cx - 95, top + 44, 0xBBBBBB);
+            graphics.drawString(font, "Resolution W × H (fixed ratio)", cx - 95, top + 71, 0xBBBBBB);
         }
         super.render(graphics, mouseX, mouseY, partialTick);
+        if (fitError != null) {
+            int errorY = Math.min(height - 24, top + (isNew ? 76 : 238));
+            graphics.drawCenteredString(font, fitError, cx, errorY, 0xFF5555);
+        }
         if (!isNew && screen != null) {
             graphics.drawCenteredString(font,
-                    "Page scale " + (int) Math.round(screen.zoomLevel * 100) + "%", cx, height / 2 + 105, 0xAAAAAA);
+                    "Page scale " + (int) Math.round(screen.zoomLevel * 100) + "%", cx, top + 211, 0xAAAAAA);
         }
     }
 

@@ -29,6 +29,7 @@ public class InputScreen extends Screen {
     private int tabButtonStartX;
     private int tabButtonWidth;
     private int plusButtonX;
+    private int bookmarkRows = 1;
     private final List<Button> tabButtons = new ArrayList<>();
 
     public InputScreen(BlockPos screenPos, BlockSide screenSide) {
@@ -86,19 +87,24 @@ public class InputScreen extends Screen {
         int bookmarkY = 56;
         addRenderableWidget(Button.builder(Component.literal("★"), button -> saveBookmark())
                 .bounds(6, bookmarkY, 22, 18).build());
-        {
-            int x = 32;
-            for (String url : ClientBookmarks.urls()) {
-                int available = width - x - 6;
-                if (available < 96) break;
-                int urlWidth = Math.min(220, available - 23);
-                String label = clipText(url, urlWidth - 12);
-                addRenderableWidget(Button.builder(Component.literal(label), button -> openBookmark(url))
-                        .bounds(x, bookmarkY, urlWidth, 18).build());
-                addRenderableWidget(Button.builder(Component.literal("×"), button -> removeBookmark(url))
-                        .bounds(x + urlWidth + 2, bookmarkY, 21, 18).build());
-                x += urlWidth + 26;
+        int x = 32;
+        int y = bookmarkY;
+        bookmarkRows = 1;
+        for (String url : ClientBookmarks.urls()) {
+            int available = width - x - 6;
+            if (available < 120 && x != 32) {
+                x = 32;
+                y += 21;
+                bookmarkRows++;
+                available = width - x - 6;
             }
+            int urlWidth = Math.max(70, Math.min(220, available - 23));
+            String label = clipText(url, urlWidth - 12);
+            addRenderableWidget(Button.builder(Component.literal(label), button -> openBookmark(url))
+                    .bounds(x, y, urlWidth, 18).build());
+            addRenderableWidget(Button.builder(Component.literal("×"), button -> removeBookmark(url))
+                    .bounds(x + urlWidth + 2, y, 21, 18).build());
+            x += urlWidth + 26;
         }
     }
 
@@ -297,7 +303,7 @@ public class InputScreen extends Screen {
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         renderBackground(guiGraphics);
-        guiGraphics.fill(0, 0, width, 78, 0xDD20242A);
+        guiGraphics.fill(0, 0, width, 58 + bookmarkRows * 21, 0xDD20242A);
         super.render(guiGraphics, mouseX, mouseY, partialTick);
         ScreenData data = getScreenData();
         if (data != null) {

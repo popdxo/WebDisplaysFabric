@@ -20,10 +20,10 @@
   "webdisplays.message.notLinked": "This peripheral has not been linked yet.",
   "webdisplays.message.linkAbort": "Linker reset",
   "webdisplays.gui.screencfg.seturl": "Change URL",
-  "webdisplays.gui.screencfg.rot0": "0Â°",
-  "webdisplays.gui.screencfg.rot90": "90Â°",
-  "webdisplays.gui.screencfg.rot180": "180Â°",
-  "webdisplays.gui.screencfg.rot270": "270Â°",
+  "webdisplays.gui.screencfg.rot0": "0°",
+  "webdisplays.gui.screencfg.rot90": "90°",
+  "webdisplays.gui.screencfg.rot180": "180°",
+  "webdisplays.gui.screencfg.rot270": "270°",
   "webdisplays.linker.selectScreen": "Right click on a screen",
   "webdisplays.linker.posInfo": "Screen pos: %d %d %d",
   "webdisplays.linker.sideInfo": "Side: %s",
@@ -40,6 +40,5 @@
   "webdisplays.side.north": "North",
   "webdisplays.side.south": "South",
   "webdisplays.side.west": "West",
-  "webdisplays.side.east": "East",
-  "block.webdisplays.bong": "Decorative Bong"
+  "webdisplays.side.east": "East"
 }

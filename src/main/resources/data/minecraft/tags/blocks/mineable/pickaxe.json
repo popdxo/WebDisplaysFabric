@@ -3,7 +3,6 @@
   "values": [
     "webdisplays:screen",
     "webdisplays:kb_left",
-    "webdisplays:kb_right",
-    "webdisplays:bong"
+    "webdisplays:kb_right"
   ]
 }
