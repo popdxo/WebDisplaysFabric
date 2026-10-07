@@ -31,11 +31,15 @@ public class WDRegistries {
             () -> new KeyboardBlockLeft(BlockBehaviour.Properties.of().strength(2.0f).sound(SoundType.METAL)));
     public static final KeyboardBlockRight KEYBOARD_RIGHT = registerBlock("kb_right",
             () -> new KeyboardBlockRight(BlockBehaviour.Properties.of().strength(2.0f).sound(SoundType.METAL)));
+    public static final Block BONG = registerBlock("bong",
+            () -> new Block(BlockBehaviour.Properties.of().strength(0.5f).sound(SoundType.GLASS).noOcclusion()));
 
     // === BLOCK ITEMS ===
     public static final Item SCREEN_ITEM = registerBlockItem("screen", SCREEN_BLOCK);
+    public static final Item KEYBOARD_ITEM = registerItem("keyboard", net.montoyo.wd.item.KeyboardItem::new);
     public static final Item KEYBOARD_LEFT_ITEM = registerBlockItem("kb_left", KEYBOARD_LEFT);
     public static final Item KEYBOARD_RIGHT_ITEM = registerBlockItem("kb_right", KEYBOARD_RIGHT);
+    public static final Item BONG_ITEM = registerBlockItem("bong", BONG);
 
     // === ITEMS ===
     public static final Item CONFIGURATOR = registerItem("screencfg", net.montoyo.wd.item.ItemScreenConfigurator::new);
@@ -47,7 +51,7 @@ public class WDRegistries {
 
     // === SOUNDS ===
     public static SoundEvent KEYBOARD_TYPE;
-    public static SoundEvent SCREENCFG_OPEN;
+
 
     // === CREATIVE TAB ===
     public static CreativeModeTab CREATIVE_TAB;
@@ -80,7 +84,7 @@ public class WDRegistries {
     public static void register() {
         // Register sounds
         KEYBOARD_TYPE = registerSound("keyboard_type");
-        SCREENCFG_OPEN = registerSound("screencfg_open");
+
 
         // Register block entities
         SCREEN_BLOCK_ENTITY = net.minecraft.core.Registry.register(BuiltInRegistries.BLOCK_ENTITY_TYPE,
@@ -98,15 +102,15 @@ public class WDRegistries {
                         .icon(() -> new ItemStack(SCREEN_BLOCK))
                         .displayItems((params, output) -> {
                             output.accept(SCREEN_ITEM);
-                            output.accept(KEYBOARD_LEFT_ITEM);
-                            output.accept(KEYBOARD_RIGHT_ITEM);
+                            output.accept(KEYBOARD_ITEM);
                             output.accept(CONFIGURATOR);
                             output.accept(LINKER);
+                            output.accept(BONG_ITEM);
                         })
                         .build());
     }
 
     public static ResourceLocation id(String path) {
-        return ResourceLocation.fromNamespaceAndPath("webdisplays", path);
+        return new ResourceLocation("webdisplays", path);
     }
 }

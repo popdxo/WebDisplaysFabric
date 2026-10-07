@@ -109,48 +109,49 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
         RenderSystem.setShaderTexture(0, texId);
         RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
 
-        BufferBuilder builder = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+        BufferBuilder builder = Tesselator.getInstance().getBuilder();
+        builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
 
         switch (side) {
             case NORTH -> {
-                builder.addVertex(matrix, 0, 0, 0).setUv(u1, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, h, 0).setUv(u1, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, h, 0).setUv(u0, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, 0, 0).setUv(u0, v1).setColor(1f, 1f, 1f, 1f);
+                builder.vertex(matrix, 0, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, h, 0).uv(u1, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, h, 0).uv(u0, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
             }
             case SOUTH -> {
-                builder.addVertex(matrix, w, 0, 0).setUv(u1, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, h, 0).setUv(u1, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, h, 0).setUv(u0, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, 0, 0).setUv(u0, v1).setColor(1f, 1f, 1f, 1f);
+                builder.vertex(matrix, w, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, h, 0).uv(u1, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, h, 0).uv(u0, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
             }
             case WEST -> {
-                builder.addVertex(matrix, 0, 0, 0).setUv(u0, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, 0, w).setUv(u1, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, h, w).setUv(u1, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, h, 0).setUv(u0, v0).setColor(1f, 1f, 1f, 1f);
+                builder.vertex(matrix, 0, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, 0, w).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, h, w).uv(u1, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, h, 0).uv(u0, v0).color(255, 255, 255, 255).endVertex();
             }
             case EAST -> {
-                builder.addVertex(matrix, 0, 0, w).setUv(u0, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, 0, 0).setUv(u1, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, h, 0).setUv(u1, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, h, w).setUv(u0, v0).setColor(1f, 1f, 1f, 1f);
+                builder.vertex(matrix, 0, 0, w).uv(u0, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, h, 0).uv(u1, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, h, w).uv(u0, v0).color(255, 255, 255, 255).endVertex();
             }
             case BOTTOM -> {
-                builder.addVertex(matrix, 0, 0, 0).setUv(u0, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, 0, 0).setUv(u1, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, 0, h).setUv(u1, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, 0, h).setUv(u0, v0).setColor(1f, 1f, 1f, 1f);
+                builder.vertex(matrix, 0, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, 0, h).uv(u1, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, 0, h).uv(u0, v0).color(255, 255, 255, 255).endVertex();
             }
             case TOP -> {
-                builder.addVertex(matrix, 0, 0, 0).setUv(u0, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, 0, 0).setUv(u1, v1).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, w, 0, h).setUv(u1, v0).setColor(1f, 1f, 1f, 1f);
-                builder.addVertex(matrix, 0, 0, h).setUv(u0, v0).setColor(1f, 1f, 1f, 1f);
+                builder.vertex(matrix, 0, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, w, 0, h).uv(u1, v0).color(255, 255, 255, 255).endVertex();
+                builder.vertex(matrix, 0, 0, h).uv(u0, v0).color(255, 255, 255, 255).endVertex();
             }
         }
 
-        BufferUploader.drawWithShader(builder.build());
+        BufferUploader.drawWithShader(builder.end());
         RenderSystem.disableDepthTest();
 
         // Restore blend state after screen rendering
@@ -180,12 +181,13 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
             RenderSystem.setShader(GameRenderer::getPositionColorShader);
             RenderSystem.setShaderTexture(0, 0);
             RenderSystem.disableCull();
-            BufferBuilder cb = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
-            cb.addVertex(matrix, lx - rx - ux, ly - ry - uy, lz - rz - uz).setColor(1.0f, 0.2f, 0.2f, 0.9f);
-            cb.addVertex(matrix, lx - rx + ux, ly - ry + uy, lz - rz + uz).setColor(1.0f, 0.2f, 0.2f, 0.9f);
-            cb.addVertex(matrix, lx + rx + ux, ly + ry + uy, lz + rz + uz).setColor(1.0f, 0.2f, 0.2f, 0.9f);
-            cb.addVertex(matrix, lx + rx - ux, ly + ry - uy, lz + rz - uz).setColor(1.0f, 0.2f, 0.2f, 0.9f);
-            BufferUploader.drawWithShader(cb.build());
+            BufferBuilder cb = Tesselator.getInstance().getBuilder();
+            cb.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+            cb.vertex(matrix, lx - rx - ux, ly - ry - uy, lz - rz - uz).color(255, 51, 51, 230).endVertex();
+            cb.vertex(matrix, lx - rx + ux, ly - ry + uy, lz - rz + uz).color(255, 51, 51, 230).endVertex();
+            cb.vertex(matrix, lx + rx + ux, ly + ry + uy, lz + rz + uz).color(255, 51, 51, 230).endVertex();
+            cb.vertex(matrix, lx + rx - ux, ly + ry - uy, lz + rz - uz).color(255, 51, 51, 230).endVertex();
+            BufferUploader.drawWithShader(cb.end());
             RenderSystem.enableCull();
         }
 

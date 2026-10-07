@@ -1,8 +1,8 @@
 {
   "variants": {
-    "facing=north": { "model": "webdisplays:block/kb_left" },
-    "facing=east": { "model": "webdisplays:block/kb_left", "y": 90 },
-    "facing=south": { "model": "webdisplays:block/kb_left", "y": 180 },
-    "facing=west": { "model": "webdisplays:block/kb_left", "y": 270 }
+    "facing=north": { "model": "webdisplays:block/kb_right", "y": 180 },
+    "facing=east": { "model": "webdisplays:block/kb_right", "y": 270 },
+    "facing=south": { "model": "webdisplays:block/kb_right" },
+    "facing=west": { "model": "webdisplays:block/kb_right", "y": 90 }
   }
 }

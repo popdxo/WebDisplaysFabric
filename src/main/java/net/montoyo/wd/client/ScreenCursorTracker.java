@@ -26,10 +26,6 @@ public class ScreenCursorTracker {
     private static boolean wasAttackDown = false;
     private static boolean cursorVisible = true;
     private static boolean leftButtonPressed = false;
-    private static long lastRaycastTime = 0;
-    private static final long RAYCAST_INTERVAL_MS = 50; // 20 ticks/sec → reduce to ~20/sec effectively, but skip redundant calculations
-    private static int lastPlayerChunkX = Integer.MIN_VALUE, lastPlayerChunkZ = Integer.MIN_VALUE;
-    private static int playerLookDirty = 0;
     private static double lastYaw = Double.NaN, lastPitch = Double.NaN;
 
     public static boolean isCursorVisible() {
@@ -60,19 +56,8 @@ public class ScreenCursorTracker {
             return;
         }
 
-        // Skip raycast if player hasn't rotated (major optimization)
-        float yaw = mc.player.getYRot();
-        float pitch = mc.player.getXRot();
-        if (yaw == lastYaw && pitch == lastPitch) {
-            // Only send mouse move if we have a current cursor (to keep hover state)
-            if (currentCursor != null) {
-                long now = System.currentTimeMillis();
-                if (now - lastMoveTime > 100) {
-                    lastMoveTime = now; // keep alive
-                }
-            }
-            return;
-        }
+        float yaw = mc.player.getViewYRot(1.0f);
+        float pitch = mc.player.getViewXRot(1.0f);
         lastYaw = yaw;
         lastPitch = pitch;
 
@@ -202,6 +187,23 @@ public class ScreenCursorTracker {
         leftButtonPressed = false;
     }
 
+    public static void adjustZoom(ScreenData data, double delta) {
+        if (data == null || data.browser == null) return;
+        data.zoomLevel = Math.max(0.2, Math.min(5.0, data.zoomLevel + delta));
+        applyZoom(data);
+    }
+
+    public static void resetZoom(ScreenData data) {
+        if (data == null || data.browser == null) return;
+        data.zoomLevel = 1.0;
+        applyZoom(data);
+    }
+
+    private static void applyZoom(ScreenData data) {
+        int zoomPercent = (int) Math.round(data.zoomLevel * 100);
+        MCEFHelper.injectJavascript(data.browser, "document.documentElement.style.zoom='" + zoomPercent + "%' ");
+    }
+
     public static void handleScroll(double delta) {
         if (!cursorVisible) return;
         if (currentCursor == null || currentCursor.screenData == null) return;
@@ -212,25 +214,24 @@ public class ScreenCursorTracker {
             MCEFHelper.sendMouseWheel(currentCursor.screenData.browser, currentCursor.pixelX, currentCursor.pixelY, -delta * 4, 0);
         } else if (net.minecraft.client.gui.screens.Screen.hasControlDown()) {
             // Ctrl + scroll: zoom browser page
-            ScreenData data = currentCursor.screenData;
-            double step = 0.1;
-            if (delta > 0) {
-                data.zoomLevel = Math.min(5.0, data.zoomLevel + step);
-            } else {
-                data.zoomLevel = Math.max(0.2, data.zoomLevel - step);
-            }
-            // Inject zoom via JavaScript
-            int zoomPercent = (int) (data.zoomLevel * 100);
-            String js = "document.body.style.zoom='" + zoomPercent + "%'";
-            MCEFHelper.injectJavascript(data.browser, js);
+            adjustZoom(currentCursor.screenData, delta > 0 ? 0.1 : -0.1);
         }
     }
 
     public static void clear() {
-        if (leftButtonPressed) {
-            releaseLeftButton();
-        }
+        if (leftButtonPressed) releaseLeftButton();
+        if (currentCursor != null) sendMouseLeave(Minecraft.getInstance());
         currentCursor = null;
+        leftButtonPressed = false;
+        wasAttackDown = false;
+        lastMoveTime = 0;
+        lastYaw = Double.NaN;
+        lastPitch = Double.NaN;
+    }
+
+    public static void restart(Minecraft mc) {
+        clear();
+        if (mc.level != null && mc.player != null && cursorVisible) update(mc);
     }
 
     private static void sendMouseLeave(Minecraft mc) {

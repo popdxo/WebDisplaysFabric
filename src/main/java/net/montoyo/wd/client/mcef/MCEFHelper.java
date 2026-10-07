@@ -117,15 +117,52 @@ public class MCEFHelper {
         }
     }
 
-    public static void loadBrowserUrl(Object browser, String url) {
+    public static void goBack(Object browser) {
+        invokeBrowserAction(browser, "goBack");
+    }
+
+    public static void goForward(Object browser) {
+        invokeBrowserAction(browser, "goForward");
+    }
+
+    private static void invokeBrowserAction(Object browser, String action) {
+        if (browser == null) return;
         try {
-            Method loadURLMethod = findMethod(browser.getClass(), "loadURL", String.class);
-            if (loadURLMethod != null) {
-                loadURLMethod.invoke(browser, url);
+            Method method = findCachedMethod(browser.getClass(), action);
+            if (method != null) method.invoke(browser);
+        } catch (Exception e) {
+            Log.warning("Failed to {} browser: {}", action, e.getMessage());
+        }
+    }
+
+    public static boolean loadBrowserUrl(Object browser, String url) {
+        if (browser == null) return false;
+        try {
+            Method loadURLMethod = findCachedMethod(browser.getClass(), "loadURL", String.class);
+            if (loadURLMethod == null) loadURLMethod = findCachedMethod(browser.getClass(), "loadUrl", String.class);
+            if (loadURLMethod == null) loadURLMethod = findCachedMethod(browser.getClass(), "navigate", String.class);
+            if (loadURLMethod == null) {
+                Log.warning("Browser does not expose a URL loading method");
+                return false;
             }
+            loadURLMethod.invoke(browser, url);
+            return true;
         } catch (Exception e) {
             Log.warning("Failed to load URL: {}", e.getMessage());
+            return false;
         }
+    }
+
+    public static String getBrowserTitle(Object browser) {
+        try {
+            Method getTitleMethod = findCachedMethod(browser.getClass(), "getTitle");
+            if (getTitleMethod != null) {
+                Object result = getTitleMethod.invoke(browser);
+                return result != null ? result.toString() : "";
+            }
+        } catch (Exception e) {
+        }
+        return "";
     }
 
     public static String getBrowserUrl(Object browser) {
@@ -215,8 +252,13 @@ public class MCEFHelper {
     public static void sendKeyPress(Object browser, int keyCode, long scanCode, int modifiers) {
         try {
             int vkCode = glfwToVk(keyCode);
-            Method method = findCachedMethod(browser.getClass(), "sendKeyPress", int.class, long.class, int.class);
-            if (method != null) method.invoke(browser, vkCode, scanCode, modifiers);
+            Method method = findCachedMethod(browser.getClass(), "sendKeyPress", int.class, int.class, int.class);
+            if (method != null) {
+                method.invoke(browser, vkCode, (int) scanCode, modifiers);
+            } else {
+                method = findCachedMethod(browser.getClass(), "sendKeyPress", int.class, long.class, int.class);
+                if (method != null) method.invoke(browser, vkCode, scanCode, modifiers);
+            }
         } catch (Exception e) {
         }
     }
@@ -224,8 +266,13 @@ public class MCEFHelper {
     public static void sendKeyRelease(Object browser, int keyCode, long scanCode, int modifiers) {
         try {
             int vkCode = glfwToVk(keyCode);
-            Method method = findCachedMethod(browser.getClass(), "sendKeyRelease", int.class, long.class, int.class);
-            if (method != null) method.invoke(browser, vkCode, scanCode, modifiers);
+            Method method = findCachedMethod(browser.getClass(), "sendKeyRelease", int.class, int.class, int.class);
+            if (method != null) {
+                method.invoke(browser, vkCode, (int) scanCode, modifiers);
+            } else {
+                method = findCachedMethod(browser.getClass(), "sendKeyRelease", int.class, long.class, int.class);
+                if (method != null) method.invoke(browser, vkCode, scanCode, modifiers);
+            }
         } catch (Exception e) {
         }
     }
@@ -330,6 +377,15 @@ public class MCEFHelper {
             } catch (NoSuchMethodException e) {
                 current = current.getSuperclass();
             }
+        }
+        for (Class<?> iface : clazz.getInterfaces()) {
+            try {
+                return iface.getMethod(name, paramTypes);
+            } catch (NoSuchMethodException e) {
+                // Continue through the interface hierarchy below.
+            }
+            Method inherited = findMethod(iface, name, paramTypes);
+            if (inherited != null) return inherited;
         }
         return null;
     }

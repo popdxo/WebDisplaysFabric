@@ -2,7 +2,7 @@ package net.montoyo.wd.block;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -11,6 +11,8 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.entity.BlockEntityTicker;
+import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.phys.BlockHitResult;
 import net.montoyo.wd.entity.ScreenBlockEntity;
 import net.montoyo.wd.item.ItemLinker;
@@ -28,25 +30,35 @@ public class ScreenBlock extends Block implements EntityBlock {
     }
 
     @Override
-    protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos, Player player, InteractionHand hand, BlockHitResult hitResult) {
+    public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state,
+                                                                  net.minecraft.world.level.block.entity.BlockEntityType<T> type) {
+        return level.isClientSide ? null : (tickLevel, pos, blockState, blockEntity) -> {
+            if (tickLevel.getGameTime() % 10L == 0L && blockEntity instanceof ScreenBlockEntity screen) {
+                screen.refreshSizeFromScreenBlocks();
+            }
+        };
+    }
+
+    @Override
+    public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player, InteractionHand hand, BlockHitResult hitResult) {
+        ItemStack stack = player.getItemInHand(hand);
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof ScreenBlockEntity screen) {
             Item item = stack.getItem();
 
             if (item == WDRegistries.CONFIGURATOR) {
-                BlockSide side = BlockSide.fromDirection(hitResult.getDirection());
                 // Client GUI opening is handled in ClientInit via UseBlockCallback
                 // to avoid importing client-only classes on the server
-                return ItemInteractionResult.SUCCESS;
+                return InteractionResult.SUCCESS;
             }
 
             if (item == WDRegistries.LINKER) {
                 BlockSide side = BlockSide.fromDirection(hitResult.getDirection());
                 ItemLinker.onRightClickScreen(player, pos, side);
-                return ItemInteractionResult.SUCCESS;
+                return InteractionResult.SUCCESS;
             }
         }
-        return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        return InteractionResult.PASS;
     }
 
     @Override

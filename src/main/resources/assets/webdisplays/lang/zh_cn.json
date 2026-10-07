@@ -3,6 +3,7 @@
   "block.webdisplays.screen": "网页屏幕方块",
   "block.webdisplays.kb_left": "键盘（左）",
   "block.webdisplays.kb_right": "键盘（右）",
+  "item.webdisplays.keyboard": "键盘",
   "item.webdisplays.screencfg": "屏幕配置器",
   "item.webdisplays.linker": "连接工具",
   "webdisplays.message.tooSmall": "这个屏幕太小了!最小尺寸是2x2.",
@@ -39,5 +40,6 @@
   "webdisplays.side.north": "北方",
   "webdisplays.side.south": "南方",
   "webdisplays.side.west": "西方",
-  "webdisplays.side.east": "东方"
+  "webdisplays.side.east": "东方",
+  "block.webdisplays.bong": "装饰水烟壶"
 }

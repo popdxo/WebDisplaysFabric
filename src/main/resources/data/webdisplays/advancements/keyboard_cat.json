@@ -8,7 +8,10 @@
   "parent": "webdisplays:link_peripheral",
   "criteria": {
     "keyboard_cat": {
-      "trigger": "webdisplays:keyboard_cat"
+      "trigger": "minecraft:inventory_changed",
+            "conditions": {
+              "items": [{ "items": ["webdisplays:kb_left", "webdisplays:kb_right"] }]
+            }
     }
   }
 }

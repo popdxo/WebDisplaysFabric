@@ -1,13 +1,15 @@
 package net.montoyo.wd.client.gui;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceLocation;
+import net.montoyo.wd.client.ScreenCursorTracker;
 import net.montoyo.wd.entity.ScreenBlockEntity;
 import net.montoyo.wd.entity.ScreenData;
 import net.montoyo.wd.network.ScreenActionPayload;
@@ -22,6 +24,8 @@ public class GuiScreenConfig extends Screen {
     private ScreenData screen;
     private EditBox widthInput;
     private EditBox heightInput;
+    private EditBox resolutionWidthInput;
+    private EditBox resolutionHeightInput;
 
     public GuiScreenConfig(BlockPos pos, BlockSide side, boolean isNew) {
         super(Component.literal("Screen Settings"));
@@ -32,136 +36,214 @@ public class GuiScreenConfig extends Screen {
 
     @Override
     protected void init() {
-        int cx = this.width / 2;
-        int cy = this.height / 2;
-
-        net.minecraft.world.level.block.entity.BlockEntity be =
-                Minecraft.getInstance().level.getBlockEntity(blockPos);
-        if (be instanceof ScreenBlockEntity sbe) {
-            screen = sbe.getScreen(side);
-        }
-
+        int cx = width / 2;
+        int top = Math.max(12, height / 2 - (isNew ? 70 : 118));
+        net.minecraft.world.level.block.entity.BlockEntity be = Minecraft.getInstance().level.getBlockEntity(blockPos);
+        if (be instanceof ScreenBlockEntity sbe) screen = sbe.getScreen(side);
         if (!isNew && screen == null) {
-            this.onClose();
+            onClose();
             return;
         }
 
-        widthInput = new EditBox(this.font, cx - 50, cy - 35, 100, 20, Component.literal("Width"));
-        widthInput.setFilter(s -> s.isEmpty() || s.matches("\\d+"));
-        widthInput.setMaxLength(3);
-        widthInput.setValue(screen != null ? String.valueOf(screen.size.x) : "2");
-        addRenderableWidget(widthInput);
+        addRenderableWidget(Button.builder(Component.literal("×"), b -> onClose())
+                .bounds(cx + 105, top, 20, 20).build());
 
-        heightInput = new EditBox(this.font, cx - 50, cy - 5, 100, 20, Component.literal("Height"));
-        heightInput.setFilter(s -> s.isEmpty() || s.matches("\\d+"));
-        heightInput.setMaxLength(3);
-        heightInput.setValue(screen != null ? String.valueOf(screen.size.y) : "2");
+        int row = top + 29;
+        widthInput = numberField(cx - 65, row, 60, screen != null ? screen.size.x : 2, 3);
+        addRenderableWidget(widthInput);
+        heightInput = numberField(cx + 5, row, 60, screen != null ? screen.size.y : 2, 3);
         addRenderableWidget(heightInput);
 
-        if (isNew) {
-            addRenderableWidget(Button.builder(
-                    Component.literal("Create"),
-                    b -> confirmSize()
-            ).bounds(cx - 50, cy + 30, 100, 20).build());
+        if (!isNew) {
+            row += 31;
+            addRenderableWidget(Button.builder(Component.literal("Resolution: " + (screen.autoResolution ? "Auto" : "Manual")),
+                    this::toggleAutoResolution).bounds(cx - 95, row, 190, 20).build());
+            row += 25;
+            resolutionWidthInput = numberField(cx - 95, row, 85, screen.resolution.x, 5);
+            resolutionHeightInput = numberField(cx + 10, row, 85, screen.resolution.y, 5);
+            resolutionWidthInput.active = !screen.autoResolution;
+            resolutionHeightInput.active = false;
+            addRenderableWidget(resolutionWidthInput);
+            addRenderableWidget(resolutionHeightInput);
+
+            row += 29;
+            addRenderableWidget(Button.builder(Component.literal("Apply"), b -> applySettings())
+                    .bounds(cx - 95, row, 90, 20).build());
+            addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.seturl"),
+                    b -> Minecraft.getInstance().setScreen(new GuiSetURL(blockPos, side)))
+                    .bounds(cx + 5, row, 90, 20).build());
+
+            row += 28;
+            addRenderableWidget(Button.builder(Component.literal("Size: " + (screen.autoSize ? "Auto" : "Manual")),
+                    this::toggleSizeMode).bounds(cx - 95, row, 90, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("Remove Display"), b -> removeDisplay())
+                    .bounds(cx + 5, row, 90, 20).build());
+
+            row += 28;
+            addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot0"),
+                    b -> setRotation(Rotation.ROT_0)).bounds(cx - 95, row, 43, 20).build());
+            addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot90"),
+                    b -> setRotation(Rotation.ROT_90)).bounds(cx - 49, row, 43, 20).build());
+            addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot180"),
+                    b -> setRotation(Rotation.ROT_180)).bounds(cx - 3, row, 43, 20).build());
+            addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot270"),
+                    b -> setRotation(Rotation.ROT_270)).bounds(cx + 43, row, 43, 20).build());
+
+            row += 28;
+            addRenderableWidget(Button.builder(Component.literal("−"), b -> adjustZoom(-0.1))
+                    .bounds(cx - 65, row, 30, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("100%"), b -> resetZoom())
+                    .bounds(cx - 30, row, 60, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("+"), b -> adjustZoom(0.1))
+                    .bounds(cx + 35, row, 30, 20).build());
         } else {
-            addRenderableWidget(Button.builder(
-                    Component.literal("Apply Size"),
-                    b -> confirmSize()
-            ).bounds(cx - 100, cy + 30, 100, 20).build());
-
-            addRenderableWidget(Button.builder(
-                    Component.translatable("webdisplays.gui.screencfg.seturl"),
-                    b -> Minecraft.getInstance().setScreen(new GuiSetURL(blockPos, side))
-            ).bounds(cx, cy + 30, 100, 20).build());
-
-            addRenderableWidget(Button.builder(
-                    Component.translatable("webdisplays.gui.screencfg.rot0"),
-                    b -> setRotation(Rotation.ROT_0)
-            ).bounds(cx - 75, cy + 60, 45, 20).build());
-            addRenderableWidget(Button.builder(
-                    Component.translatable("webdisplays.gui.screencfg.rot90"),
-                    b -> setRotation(Rotation.ROT_90)
-            ).bounds(cx - 25, cy + 60, 45, 20).build());
-            addRenderableWidget(Button.builder(
-                    Component.translatable("webdisplays.gui.screencfg.rot180"),
-                    b -> setRotation(Rotation.ROT_180)
-            ).bounds(cx + 25, cy + 60, 45, 20).build());
-            addRenderableWidget(Button.builder(
-                    Component.translatable("webdisplays.gui.screencfg.rot270"),
-                    b -> setRotation(Rotation.ROT_270)
-            ).bounds(cx + 75, cy + 60, 45, 20).build());
+            row += 33;
+            addRenderableWidget(Button.builder(Component.literal("Create"), b -> createScreen())
+                    .bounds(cx - 45, row, 90, 20).build());
         }
-
-        addRenderableWidget(Button.builder(
-                Component.translatable("webdisplays.gui.seturl.cancel"),
-                b -> this.onClose()
-        ).bounds(cx - 50, cy + 95, 100, 20).build());
     }
 
-    private int parseInt(String s, int def) {
-        try { return Integer.parseInt(s); } catch (NumberFormatException e) { return def; }
+    private EditBox numberField(int x, int y, int fieldWidth, int value, int maxLength) {
+        EditBox field = new EditBox(font, x, y, fieldWidth, 20, Component.empty());
+        field.setFilter(s -> s.isEmpty() || s.matches("\\d+"));
+        field.setMaxLength(maxLength);
+        field.setValue(Integer.toString(value));
+        return field;
     }
 
-    private void confirmSize() {
-        int bw = Math.max(1, Math.min(100, parseInt(widthInput.getValue(), 2)));
-        int bh = Math.max(1, Math.min(100, parseInt(heightInput.getValue(), 2)));
-        Vector2i size = new Vector2i(bw, bh);
-        Vector2i res = new Vector2i(bw * 320, bh * 320);
-        ScreenBlockEntity sbe = getBlockEntity();
-        if (sbe == null) return;
-
-        if (isNew) {
-            String owner = Minecraft.getInstance().player != null ? Minecraft.getInstance().player.getName().getString() : "unknown";
-            sbe.addScreen(side, res, size, owner);
-            if (ClientPlayNetworking.canSend(ScreenActionPayload.TYPE)) {
-                ClientPlayNetworking.send(new ScreenActionPayload(blockPos, side.id,
-                        ScreenActionPayload.ACTION_ADD_SCREEN, bw + "," + bh));
-            }
-        } else {
-            sbe.setResolution(side, res);
-            if (ClientPlayNetworking.canSend(ScreenActionPayload.TYPE)) {
-                ClientPlayNetworking.send(ScreenActionPayload.setResolution(blockPos, side.id, res.x, res.y));
-            }
-        }
-        this.onClose();
+    private int parse(EditBox field, int fallback) {
+        try { return Integer.parseInt(field.getValue()); } catch (NumberFormatException e) { return fallback; }
     }
 
-    private void setRotation(Rotation rot) {
-        ScreenBlockEntity sbe = getBlockEntity();
-        if (sbe != null) {
-            sbe.setRotation(side, rot);
-            if (ClientPlayNetworking.canSend(ScreenActionPayload.TYPE)) {
-                ClientPlayNetworking.send(ScreenActionPayload.setRotation(blockPos, side.id, rot.id));
-            }
+
+    private void createScreen() {
+        int blocksWide = Math.max(1, Math.min(100, parse(widthInput, 2)));
+        int blocksHigh = Math.max(1, Math.min(100, parse(heightInput, 2)));
+        ScreenBlockEntity be = getBlockEntity();
+        if (be == null || !be.canFitScreen(side, blocksWide, blocksHigh)) {
+            showFitError();
+            return;
         }
-        this.onClose();
+        String owner = Minecraft.getInstance().player != null
+                ? Minecraft.getInstance().player.getName().getString() : "unknown";
+        Vector2i size = new Vector2i(blocksWide, blocksHigh);
+        Vector2i resolution = new Vector2i(blocksWide * 320, blocksHigh * 320);
+        if (!be.addScreen(side, resolution, size, owner)) return;
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                new ScreenActionPayload(blockPos, side.id, ScreenActionPayload.ACTION_ADD_SCREEN,
+                        blocksWide + "," + blocksHigh).toPacket());
+        onClose();
+    }
+
+    private void applySettings() {
+        ScreenBlockEntity be = getBlockEntity();
+        if (be == null || screen == null) return;
+        int blocksWide = Math.max(1, Math.min(100, parse(widthInput, screen.size.x)));
+        int blocksHigh = Math.max(1, Math.min(100, parse(heightInput, screen.size.y)));
+        int resolutionWidth = Math.max(64, Math.min(32000, parse(resolutionWidthInput, screen.resolution.x)));
+        int resolutionHeight = Math.max(64, Math.min(32000, parse(resolutionHeightInput, screen.resolution.y)));
+        int requiredWidth = Math.max(blocksWide, (int) Math.ceil(resolutionWidth / 320.0));
+        int requiredHeight = Math.max(blocksHigh, (int) Math.ceil(resolutionHeight / 320.0));
+        if (!be.canFitScreen(side, requiredWidth, requiredHeight)) {
+            showFitError();
+            return;
+        }
+        if (!be.setDisplaySize(side, blocksWide, blocksHigh)) {
+            showFitError();
+            return;
+        }
+        if (!screen.autoResolution) {
+            int fixedHeight = Math.max(64, Math.min(32000,
+                    (int) Math.round(resolutionWidth * blocksHigh / (double) blocksWide)));
+            screen.resolution.set(resolutionWidth, fixedHeight);
+            screen.resizeBrowsers(resolutionWidth, fixedHeight);
+            be.setResolution(side, new Vector2i(resolutionWidth, fixedHeight));
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.setResolution(blockPos, side.id, resolutionWidth, fixedHeight).toPacket());
+        }
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.setDisplaySize(blockPos, side.id, blocksWide, blocksHigh).toPacket());
+        onClose();
+    }
+
+    private void showFitError() {
+        if (Minecraft.getInstance().player != null) {
+            Minecraft.getInstance().player.displayClientMessage(Component.literal(
+                    "Screen must fit on free screen blocks and cannot overlap another display."), true);
+        }
+    }
+
+    private void toggleAutoResolution(Button button) {
+        ScreenBlockEntity be = getBlockEntity();
+        if (be == null || screen == null) return;
+        screen.autoResolution = !screen.autoResolution;
+        be.setAutoResolution(side, screen.autoResolution);
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.setAutoResolution(blockPos, side.id, screen.autoResolution).toPacket());
+        button.setMessage(Component.literal("Resolution: " + (screen.autoResolution ? "Auto" : "Manual")));
+        if (resolutionWidthInput != null) resolutionWidthInput.active = !screen.autoResolution;
+    }
+
+    private void adjustZoom(double delta) {
+        if (screen != null) ScreenCursorTracker.adjustZoom(screen, delta);
+    }
+
+    private void resetZoom() {
+        if (screen != null) ScreenCursorTracker.resetZoom(screen);
+    }
+
+    private void toggleSizeMode(Button button) {
+        ScreenBlockEntity be = getBlockEntity();
+        if (be == null || screen == null) return;
+        screen.autoSize = !screen.autoSize;
+        be.setAutoSize(side, screen.autoSize);
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.setAutoSize(blockPos, side.id, screen.autoSize).toPacket());
+        button.setMessage(Component.literal("Size: " + (screen.autoSize ? "Auto" : "Manual")));
+    }
+
+    private void removeDisplay() {
+        ScreenBlockEntity be = getBlockEntity();
+        if (be != null) {
+            be.removeScreen(side);
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.removeScreen(blockPos, side.id).toPacket());
+        }
+        onClose();
+    }
+
+    private void setRotation(Rotation rotation) {
+        ScreenBlockEntity be = getBlockEntity();
+        if (be != null) {
+            be.setRotation(side, rotation);
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.setRotation(blockPos, side.id, rotation.id).toPacket());
+        }
+        onClose();
     }
 
     private ScreenBlockEntity getBlockEntity() {
-        net.minecraft.world.level.block.entity.BlockEntity be =
-                Minecraft.getInstance().level.getBlockEntity(blockPos);
-        return (be instanceof ScreenBlockEntity sbe) ? sbe : null;
+        if (Minecraft.getInstance().level == null) return null;
+        net.minecraft.world.level.block.entity.BlockEntity be = Minecraft.getInstance().level.getBlockEntity(blockPos);
+        return be instanceof ScreenBlockEntity screenBe ? screenBe : null;
     }
 
     @Override
-    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        // Draw widgets first (inputs, buttons)
-        super.render(guiGraphics, mouseX, mouseY, partialTick);
-
-        // Draw text on top at the same layer as the GUI
-        int cx = this.width / 2;
-
-        guiGraphics.drawCenteredString(this.font, "Screen Size (1-100 blocks)", cx, this.height / 2 - 55, 0xFFFFFF);
-        guiGraphics.drawString(this.font, "Width:", cx - 50, this.height / 2 - 47, 0xCCCCCC);
-        guiGraphics.drawString(this.font, "Height:", cx - 50, this.height / 2 - 17, 0xCCCCCC);
-
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        renderBackground(graphics);
+        int cx = width / 2;
+        int top = Math.max(12, height / 2 - (isNew ? 70 : 118));
+        int panelBottom = Math.min(height - 10, height / 2 + (isNew ? 48 : 128));
+        graphics.fill(cx - 118, top - 10, cx + 118, panelBottom, 0xD820242A);
+        graphics.drawCenteredString(font, "Display Configuration", cx, top - 2, 0xFFFFFF);
+        graphics.drawString(font, "Blocks W × H", cx - 95, top + 13, 0xBBBBBB);
+        if (!isNew) {
+            graphics.drawString(font, "Resolution W × H (fixed ratio)", cx - 95, top + 44, 0xBBBBBB);
+        }
+        super.render(graphics, mouseX, mouseY, partialTick);
         if (!isNew && screen != null) {
-            guiGraphics.drawCenteredString(this.font,
-                    "Owner: " + (screen.owner != null ? screen.owner : "N/A"),
-                    cx, this.height / 2 - 80, 0xAAAAAA);
-            guiGraphics.drawCenteredString(this.font,
-                    "Resolution: " + screen.resolution.x + "x" + screen.resolution.y,
-                    cx, this.height / 2 - 68, 0x888888);
+            graphics.drawCenteredString(font,
+                    "Page scale " + (int) Math.round(screen.zoomLevel * 100) + "%", cx, height / 2 + 105, 0xAAAAAA);
         }
     }
 

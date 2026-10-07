@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.server.MinecraftServer;
 import net.montoyo.wd.command.ScreenCommand;
@@ -46,8 +46,6 @@ public class WebDisplays implements ModInitializer {
         // Register all blocks, items, block entities, sounds, creative tab
         WDRegistries.register();
 
-        // Register network payload types (play phase)
-        PayloadTypeRegistry.playC2S().register(ScreenActionPayload.TYPE, ScreenActionPayload.CODEC);
 
         // Register server-side network handlers
         ServerNetHandler.register();

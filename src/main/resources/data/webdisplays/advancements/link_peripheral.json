@@ -8,7 +8,10 @@
   "parent": "webdisplays:screen",
   "criteria": {
     "link_peripheral": {
-      "trigger": "webdisplays:link_peripheral"
+      "trigger": "minecraft:inventory_changed",
+            "conditions": {
+              "items": [{ "items": ["webdisplays:linker"] }]
+            }
     }
   }
 }

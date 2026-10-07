@@ -2,6 +2,7 @@ package net.montoyo.wd.mixin;
 
 import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -19,6 +20,7 @@ import java.nio.ByteBuffer;
  * subsequently loads its own textures, these non-zero values corrupt the data,
  * causing visible noise/artifacts on distant blocks and grass.
  */
+@Pseudo
 @Mixin(targets = "com.cinemamod.mcef.MCEFBrowser", remap = false)
 public class PixelStoreResetMixin {
 

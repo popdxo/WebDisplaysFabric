@@ -1,28 +1,26 @@
 package net.montoyo.wd.network;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.RegistryFriendlyByteBuf;
-import net.minecraft.network.codec.ByteBufCodecs;
-import net.minecraft.network.codec.StreamCodec;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.FriendlyByteBuf;
 
-public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, String extraData) implements CustomPacketPayload {
-    public static final CustomPacketPayload.Type<ScreenActionPayload> TYPE =
-            new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath("webdisplays", "screen_action"));
+public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, String extraData) {
+    public static void write(FriendlyByteBuf buf, ScreenActionPayload payload) {
+        buf.writeBlockPos(payload.pos);
+        buf.writeVarInt(payload.sideOrdinal);
+        buf.writeUtf(payload.action);
+        buf.writeUtf(payload.extraData);
+    }
 
-    public static final StreamCodec<RegistryFriendlyByteBuf, ScreenActionPayload> CODEC =
-            StreamCodec.composite(
-                    BlockPos.STREAM_CODEC, ScreenActionPayload::pos,
-                    ByteBufCodecs.INT, ScreenActionPayload::sideOrdinal,
-                    ByteBufCodecs.STRING_UTF8, ScreenActionPayload::action,
-                    ByteBufCodecs.STRING_UTF8, ScreenActionPayload::extraData,
-                    ScreenActionPayload::new
-            );
+    public static ScreenActionPayload read(FriendlyByteBuf buf) {
+        return new ScreenActionPayload(buf.readBlockPos(), buf.readVarInt(), buf.readUtf(), buf.readUtf());
+    }
 
-    @Override
-    public Type<? extends CustomPacketPayload> type() {
-        return TYPE;
+    public FriendlyByteBuf toPacket() {
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        write(buf, this);
+        return buf;
     }
 
     public static final String ACTION_ADD_SCREEN = "add_screen";
@@ -30,6 +28,12 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
     public static final String ACTION_SET_URL = "set_url";
     public static final String ACTION_SET_RESOLUTION = "set_resolution";
     public static final String ACTION_SET_ROTATION = "set_rotation";
+    public static final String ACTION_SET_AUTO_SIZE = "set_auto_size";
+    public static final String ACTION_SET_AUTO_RESOLUTION = "set_auto_resolution";
+    public static final String ACTION_SET_DISPLAY_SIZE = "set_display_size";
+    public static final String ACTION_ADD_BOOKMARK = "add_bookmark";
+    public static final String ACTION_REMOVE_BOOKMARK = "remove_bookmark";
+    public static final ResourceLocation BOOKMARK_SYNC = new ResourceLocation("webdisplays", "bookmark_sync");
 
     public static ScreenActionPayload addScreen(BlockPos pos, int sideOrdinal, String owner) {
         return new ScreenActionPayload(pos, sideOrdinal, ACTION_ADD_SCREEN, owner);
@@ -49,5 +53,25 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
 
     public static ScreenActionPayload setRotation(BlockPos pos, int sideOrdinal, int rotationOrdinal) {
         return new ScreenActionPayload(pos, sideOrdinal, ACTION_SET_ROTATION, String.valueOf(rotationOrdinal));
+    }
+
+    public static ScreenActionPayload setAutoSize(BlockPos pos, int sideOrdinal, boolean enabled) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_SET_AUTO_SIZE, Boolean.toString(enabled));
+    }
+
+    public static ScreenActionPayload setAutoResolution(BlockPos pos, int sideOrdinal, boolean enabled) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_SET_AUTO_RESOLUTION, Boolean.toString(enabled));
+    }
+
+    public static ScreenActionPayload setDisplaySize(BlockPos pos, int sideOrdinal, int width, int height) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_SET_DISPLAY_SIZE, width + "," + height);
+    }
+
+    public static ScreenActionPayload addBookmark(BlockPos pos, int sideOrdinal, String url) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_ADD_BOOKMARK, url);
+    }
+
+    public static ScreenActionPayload removeBookmark(String url) {
+        return new ScreenActionPayload(BlockPos.ZERO, 0, ACTION_REMOVE_BOOKMARK, url);
     }
 }

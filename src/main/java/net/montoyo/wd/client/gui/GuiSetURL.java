@@ -1,6 +1,7 @@
 package net.montoyo.wd.client.gui;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -40,10 +41,8 @@ public class GuiSetURL extends Screen {
                     if (!url.isEmpty()) {
                         try {
                             String finalUrl = ScreenBlockEntity.url(url);
-                            if (ClientPlayNetworking.canSend(ScreenActionPayload.TYPE)) {
-                                ClientPlayNetworking.send(ScreenActionPayload.setUrl(
-                                        blockPos, side.id, finalUrl));
-                            }
+                            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                                    ScreenActionPayload.setUrl(blockPos, side.id, finalUrl).toPacket());
                             net.minecraft.world.level.block.entity.BlockEntity be =
                                     Minecraft.getInstance().level.getBlockEntity(blockPos);
                             if (be instanceof ScreenBlockEntity screen) {

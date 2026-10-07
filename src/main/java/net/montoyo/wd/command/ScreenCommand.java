@@ -21,8 +21,7 @@ public class ScreenCommand {
         ITEMS.put("screen", new ItemStack(WDRegistries.SCREEN_ITEM));
         ITEMS.put("configurator", new ItemStack(WDRegistries.CONFIGURATOR));
         ITEMS.put("linker", new ItemStack(WDRegistries.LINKER));
-        ITEMS.put("kb_left", new ItemStack(WDRegistries.KEYBOARD_LEFT_ITEM));
-        ITEMS.put("kb_right", new ItemStack(WDRegistries.KEYBOARD_RIGHT_ITEM));
+        ITEMS.put("keyboard", new ItemStack(WDRegistries.KEYBOARD_ITEM));
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {

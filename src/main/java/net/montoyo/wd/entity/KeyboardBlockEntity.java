@@ -1,12 +1,13 @@
 package net.montoyo.wd.entity;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.HolderLookup;
+
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.world.level.block.entity.BlockEntity;
+
 import net.minecraft.world.level.block.state.BlockState;
 import net.montoyo.wd.registry.WDRegistries;
 import net.montoyo.wd.utilities.data.BlockSide;
@@ -21,23 +22,64 @@ public class KeyboardBlockEntity extends BlockEntity {
     }
 
     public void setLinked(BlockPos pos, BlockSide side) {
+        setLinkedLocal(pos, side);
+        KeyboardBlockEntity pair = getPair();
+        if (pair != null) pair.setLinkedLocal(pos, side);
+    }
+
+    private void setLinkedLocal(BlockPos pos, BlockSide side) {
         this.linkedPos = pos;
         this.linkedSide = side;
         setChanged();
+        if (level != null && !level.isClientSide) {
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        }
     }
 
     public void clearLinked() {
+        clearLinkedLocal();
+        KeyboardBlockEntity pair = getPair();
+        if (pair != null) pair.clearLinkedLocal();
+    }
+
+    private void clearLinkedLocal() {
         this.linkedPos = null;
         this.linkedSide = null;
         setChanged();
+        if (level != null && !level.isClientSide) {
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        }
+    }
+
+    private KeyboardBlockEntity getPair() {
+        if (level == null) return null;
+        BlockState state = getBlockState();
+        BlockPos pairPos;
+        if (state.is(WDRegistries.KEYBOARD_LEFT)) {
+            pairPos = worldPosition.relative(state.getValue(net.minecraft.world.level.block.HorizontalDirectionalBlock.FACING).getClockWise());
+        } else if (state.is(WDRegistries.KEYBOARD_RIGHT)) {
+            pairPos = worldPosition.relative(state.getValue(net.minecraft.world.level.block.HorizontalDirectionalBlock.FACING).getCounterClockWise());
+        } else {
+            return null;
+        }
+        BlockState pairState = level.getBlockState(pairPos);
+        boolean expectedPair = state.is(WDRegistries.KEYBOARD_LEFT)
+                ? pairState.is(WDRegistries.KEYBOARD_RIGHT)
+                : pairState.is(WDRegistries.KEYBOARD_LEFT);
+        if (!expectedPair || pairState.getValue(net.minecraft.world.level.block.HorizontalDirectionalBlock.FACING)
+                != state.getValue(net.minecraft.world.level.block.HorizontalDirectionalBlock.FACING)) {
+            return null;
+        }
+        BlockEntity pair = level.getBlockEntity(pairPos);
+        return pair instanceof KeyboardBlockEntity keyboard ? keyboard : null;
     }
 
     public @Nullable BlockPos getLinkedPos() { return linkedPos; }
     public @Nullable BlockSide getLinkedSide() { return linkedSide; }
 
     @Override
-    protected void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
-        super.saveAdditional(tag, registries);
+    public void saveAdditional(CompoundTag tag) {
+        super.saveAdditional(tag);
         if (linkedPos != null) {
             tag.putInt("lx", linkedPos.getX());
             tag.putInt("ly", linkedPos.getY());
@@ -47,8 +89,8 @@ public class KeyboardBlockEntity extends BlockEntity {
     }
 
     @Override
-    protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
-        super.loadAdditional(tag, registries);
+    public void load(CompoundTag tag) {
+        super.load(tag);
         if (tag.contains("lx")) {
             linkedPos = new BlockPos(tag.getInt("lx"), tag.getInt("ly"), tag.getInt("lz"));
             linkedSide = BlockSide.fromInt(tag.getInt("ls"));
@@ -59,9 +101,9 @@ public class KeyboardBlockEntity extends BlockEntity {
     }
 
     @Override
-    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
-        CompoundTag tag = super.getUpdateTag(registries);
-        saveAdditional(tag, registries);
+    public CompoundTag getUpdateTag() {
+        CompoundTag tag = super.getUpdateTag();
+        saveAdditional(tag);
         return tag;
     }
 
