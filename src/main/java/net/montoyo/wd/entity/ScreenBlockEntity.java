@@ -403,6 +403,9 @@ public class ScreenBlockEntity extends BlockEntity {
                     if (screen.browser != null) {
                         Log.info("Created browser for screen at {} side {}", worldPosition, screen.side);
                         injectScripts(screen.browser);
+                        if (screen.tabUrls.size() > 1) {
+                            screen.reconcileTabs(new ArrayList<>(screen.tabUrls), screen.activeTab());
+                        }
                     }
                 }
             }
@@ -545,7 +548,20 @@ public class ScreenBlockEntity extends BlockEntity {
             screenTag.putBoolean("autoSize", screen.autoSize);
             screenTag.putBoolean("autoResolution", screen.autoResolution);
             if (screen.owner != null) screenTag.putString("owner", screen.owner);
+            if (screen.ownerUuid != null) screenTag.putString("ownerUuid", screen.ownerUuid);
             if (screen.url != null) screenTag.putString("url", screen.url);
+            ListTag tabs = new ListTag();
+            for (String tabUrl : screen.tabUrls) {
+                CompoundTag tab = new CompoundTag();
+                tab.putString("url", tabUrl);
+                tabs.add(tab);
+            }
+            screenTag.put("tabs", tabs);
+            screenTag.putInt("activeTab", screen.activeTab());
+            screenTag.putDouble("mediaTime", screen.mediaTime);
+            screenTag.putBoolean("mediaPlaying", screen.mediaPlaying);
+            screenTag.putLong("mediaRevision", screen.mediaRevision);
+            screenTag.putLong("mediaUpdatedAt", screen.mediaUpdatedAt);
 
             screenList.add(screenTag);
         }
@@ -571,7 +587,20 @@ public class ScreenBlockEntity extends BlockEntity {
                 boolean autoSize = !screenTag.contains("autoSize") || screenTag.getBoolean("autoSize");
                 boolean autoResolution = !screenTag.contains("autoResolution") || screenTag.getBoolean("autoResolution");
                 String owner = screenTag.contains("owner") ? screenTag.getString("owner") : null;
+                String ownerUuid = screenTag.contains("ownerUuid") ? screenTag.getString("ownerUuid") : null;
                 String url = screenTag.contains("url") ? screenTag.getString("url") : null;
+                double mediaTime = screenTag.getDouble("mediaTime");
+                boolean mediaPlaying = screenTag.getBoolean("mediaPlaying");
+                long mediaRevision = screenTag.getLong("mediaRevision");
+                long mediaUpdatedAt = screenTag.getLong("mediaUpdatedAt");
+                List<String> tabUrls = new ArrayList<>();
+                if (screenTag.contains("tabs", Tag.TAG_LIST)) {
+                    ListTag tabs = screenTag.getList("tabs", Tag.TAG_COMPOUND);
+                    for (int tabIndex = 0; tabIndex < Math.min(tabs.size(), 32); tabIndex++) {
+                        tabUrls.add(tabs.getCompound(tabIndex).getString("url"));
+                    }
+                }
+                int activeTab = screenTag.getInt("activeTab");
 
                 ScreenData screen = null;
                 for (ScreenData previous : previousScreens) {
@@ -593,11 +622,32 @@ public class ScreenBlockEntity extends BlockEntity {
                     }
                     screen.owner = owner;
                 }
+                screen.ownerUuid = ownerUuid;
+                boolean mediaChanged = screen.mediaRevision != mediaRevision;
                 screen.rotation = rot;
+                screen.mediaTime = mediaTime;
+                screen.mediaPlaying = mediaPlaying;
+                screen.mediaRevision = mediaRevision;
+                screen.mediaUpdatedAt = mediaUpdatedAt;
+                if (mediaChanged && level != null && level.isClientSide && screen.browser != null) {
+                    screen.applyMediaState();
+                }
                 screen.autoVolume = autoVol;
                 screen.autoSize = autoSize;
                 screen.autoResolution = autoResolution;
                 screen.url = url;
+                if (tabUrls.isEmpty()) tabUrls.add(url == null ? "about:blank" : url);
+                int previousActiveTab = screen.activeTab();
+                screen.setActiveTabIndex(Math.max(0, Math.min(activeTab, tabUrls.size() - 1)));
+                boolean tabsChanged = !screen.tabUrls.equals(tabUrls) || previousActiveTab != screen.activeTab();
+                if (tabsChanged) {
+                    screen.tabUrls.clear();
+                    screen.tabUrls.addAll(tabUrls);
+                    if (level != null && level.isClientSide && screen.browser != null) {
+                        screen.reconcileTabs(tabUrls, activeTab);
+                    }
+                }
+                if (screen.tabUrls.isEmpty()) screen.tabUrls.addAll(tabUrls);
 
                 screens.add(screen);
             }

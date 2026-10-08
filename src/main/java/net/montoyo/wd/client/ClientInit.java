@@ -34,8 +34,9 @@ public class ClientInit implements ClientModInitializer {
     private static int previousHotbarSlot = -1;
     private static boolean wasTabDown = false;
     private static long lastUrlCheckTime = 0;
-    private static final long URL_CHECK_INTERVAL_MS = 1000;
+    private static final long URL_CHECK_INTERVAL_MS = 100;
     private static long lastAudioUpdateTime = 0;
+    private static long lastMediaSyncTime = 0;
     private static final long AUDIO_UPDATE_INTERVAL_MS = 50;
     private static final double AUDIO_FULL_VOLUME_DISTANCE = 2.0;
     private static final double AUDIO_SILENT_DISTANCE = 16.0;
@@ -122,6 +123,8 @@ public class ClientInit implements ClientModInitializer {
             long now = System.currentTimeMillis();
             boolean shouldCheckUrl = (now - lastUrlCheckTime) >= URL_CHECK_INTERVAL_MS;
             if (shouldCheckUrl) lastUrlCheckTime = now;
+            boolean shouldSyncMedia = client.player != null && (now - lastMediaSyncTime) >= 1000;
+            if (shouldSyncMedia) lastMediaSyncTime = now;
             boolean shouldUpdateAudio = client.player != null
                     && (now - lastAudioUpdateTime) >= AUDIO_UPDATE_INTERVAL_MS;
             if (shouldUpdateAudio) lastAudioUpdateTime = now;
@@ -152,13 +155,78 @@ public class ClientInit implements ClientModInitializer {
                     }
                 }
                 // Detect page navigation and re-inject window.open override (throttled)
-                if (shouldCheckUrl) {
+                if (shouldCheckUrl || shouldSyncMedia) {
                     for (int i = 0; i < screen.screenCount(); i++) {
                         ScreenData data = screen.getScreen(i);
                         if (data == null || data.browser == null) continue;
+                        boolean pollMedia = client.player != null && now - data.lastMediaPollTime >= 500;
+                        if (pollMedia) {
+                            data.lastMediaPollTime = now;
+                            data.installMediaReporter();
+                        }
+                        boolean isOwner = client.player != null && (data.ownerUuid != null
+                                ? client.player.getUUID().toString().equals(data.ownerUuid)
+                                : client.player.getGameProfile().getName().equals(data.owner));
+                        if (shouldSyncMedia && !data.mediaOwnerDiagnosticLogged) {
+                            data.mediaOwnerDiagnosticLogged = true;
+                            Log.info("Media sync owner check at {} side {}: player={} uuid={}, owner={} uuid={}, match={}",
+                                    screen.getBlockPos(), data.side,
+                                    client.player == null ? "<none>" : client.player.getGameProfile().getName(),
+                                    client.player == null ? "<none>" : client.player.getUUID(),
+                                    data.owner, data.ownerUuid, isOwner);
+                        }
+                        String title = pollMedia ? MCEFHelper.getBrowserTitle(data.browser) : "";
+                        String mediaMessage = pollMedia ? data.latestMediaMessage : "";
+                        if (pollMedia && isOwner && now - data.lastMediaTitleDiagnosticTime >= 10000) {
+                            data.lastMediaTitleDiagnosticTime = now;
+                            Log.info("Media browser title sample at {} side {}: player={} ownerMatch={} url='{}' title='{}'",
+                                    screen.getBlockPos(), data.side,
+                                    client.player.getGameProfile().getName(), isOwner,
+                                    MCEFHelper.getBrowserUrl(data.browser), title);
+                        }
+                        if (pollMedia && mediaMessage != null && mediaMessage.startsWith("__WD_MEDIA__|")) {
+                            if (!data.mediaMarkerObserved) {
+                                data.mediaMarkerObserved = true;
+                                Log.info("Media marker observed for display {} side {}", screen.getBlockPos(), data.side);
+                            }
+                        }
+                        if (pollMedia && data.activeTab() >= 0 && data.tab(data.activeTab()) == data.browser
+                                && mediaMessage != null && mediaMessage.startsWith("__WD_MEDIA__|")) {
+                            String[] media = mediaMessage.split("\\|", 6);
+                            if (media.length >= 6) {
+                                String event = media[1];
+                                String eventId = media[4];
+                                try {
+                                    double mediaTime = Double.parseDouble(media[2]);
+                                    boolean playing = "1".equals(media[3]);
+                                    boolean isAction = "play".equals(event) || "pause".equals(event);
+                                    String eventKey = data.activeTab() + ":" + eventId;
+                                    boolean shouldSend = isAction ? !eventKey.equals(data.lastMediaEvent)
+                                            : isOwner && pollMedia;
+                                    if (shouldSend) {
+                                        if (isAction) data.lastMediaEvent = eventKey;
+                                        if (isOwner && !data.mediaPacketSentLogged) {
+                                            data.mediaPacketSentLogged = true;
+                                            Log.info("Sending owner media sync for display {} side {} tab {} at {}s playing={}",
+                                                    screen.getBlockPos(), data.side, data.activeTab(), mediaTime, playing);
+                                        }
+                                        ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
+                                                ScreenActionPayload.mediaState(screen.getBlockPos(), data.side.id,
+                                                        data.activeTab(), mediaTime, playing, event).toPacket());
+                                    }
+                                } catch (NumberFormatException ignored) {}
+                            }
+                        }
                         String currentUrl = MCEFHelper.getBrowserUrl(data.browser);
                         if (!currentUrl.isEmpty() && !currentUrl.equals(data.lastUrl)) {
                             data.lastUrl = currentUrl;
+                            data.mediaReporterInstalled = false;
+                            data.setTabUrl(data.activeTab(), currentUrl);
+                            if (!currentUrl.equals(data.lastReportedUrl)) {
+                                data.lastReportedUrl = currentUrl;
+                                ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
+                                        ScreenActionPayload.setUrl(screen.getBlockPos(), data.side.id, data.activeTab(), currentUrl).toPacket());
+                            }
                             ScreenBlockEntity.ensureWindowOpenOverride(data.browser);
                         }
                     }

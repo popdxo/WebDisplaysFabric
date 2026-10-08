@@ -2,6 +2,9 @@ package net.montoyo.wd.client.mcef;
 
 import java.lang.reflect.Method;
 import java.util.function.Consumer;
+import java.util.Set;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 
 import net.montoyo.wd.utilities.Log;
 
@@ -15,6 +18,7 @@ public class MCEFHelper {
     private static boolean available = false;
     private static boolean checked = false;
     private static final ConcurrentHashMap<String, Method> methodCache = new ConcurrentHashMap<>();
+    private static final Set<Object> consoleListeners = Collections.newSetFromMap(new IdentityHashMap<>());
 
     public static boolean isMCEFAvailable() {
         if (!checked) {
@@ -150,6 +154,29 @@ public class MCEFHelper {
         } catch (Exception e) {
             Log.warning("Failed to load URL: {}", e.getMessage());
             return false;
+        }
+    }
+
+    public static void registerConsoleMessageListener(Object browser, Consumer<String> listener) {
+        if (browser == null || !consoleListeners.add(browser)) return;
+        try {
+            Class<?> mcefClass = Class.forName("com.cinemamod.mcef.MCEF");
+            Object client = mcefClass.getMethod("getClient").invoke(null);
+            Class<?> handlerClass = Class.forName("org.cef.handler.CefDisplayHandler");
+            Object proxy = java.lang.reflect.Proxy.newProxyInstance(
+                    handlerClass.getClassLoader(), new Class<?>[]{handlerClass}, (ignored, method, args) -> {
+                        if ("onConsoleMessage".equals(method.getName()) && args != null && args.length > 2
+                                && args[0] == browser) {
+                            listener.accept(String.valueOf(args[2]));
+                        }
+                        return method.getReturnType() == boolean.class ? false : null;
+                    });
+            Method addHandler = findCachedMethod(client.getClass(), "addDisplayHandler", handlerClass);
+            if (addHandler == null) throw new NoSuchMethodException("MCEFClient.addDisplayHandler");
+            addHandler.invoke(client, proxy);
+        } catch (Exception e) {
+            consoleListeners.remove(browser);
+            Log.warning("Failed to register browser console listener: {}", e.getMessage());
         }
     }
 

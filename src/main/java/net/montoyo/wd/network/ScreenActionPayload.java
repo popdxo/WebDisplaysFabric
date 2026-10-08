@@ -26,6 +26,11 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
     public static final String ACTION_ADD_SCREEN = "add_screen";
     public static final String ACTION_REMOVE_SCREEN = "remove_screen";
     public static final String ACTION_SET_URL = "set_url";
+    public static final String ACTION_ADD_TAB = "add_tab";
+    public static final String ACTION_SELECT_TAB = "select_tab";
+    public static final String ACTION_CLOSE_TAB = "close_tab";
+    public static final String ACTION_SYNC_TAB_URL = "sync_tab_url";
+    public static final String ACTION_MEDIA_STATE = "media_state";
     public static final String ACTION_SET_RESOLUTION = "set_resolution";
     public static final String ACTION_SET_ROTATION = "set_rotation";
     public static final String ACTION_SET_AUTO_SIZE = "set_auto_size";
@@ -45,6 +50,28 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
 
     public static ScreenActionPayload setUrl(BlockPos pos, int sideOrdinal, String url) {
         return new ScreenActionPayload(pos, sideOrdinal, ACTION_SET_URL, url);
+    }
+
+    public static ScreenActionPayload setUrl(BlockPos pos, int sideOrdinal, int tabIndex, String url) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_SYNC_TAB_URL, tabIndex + "\n" + url);
+    }
+
+    public static ScreenActionPayload addTab(BlockPos pos, int sideOrdinal) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_ADD_TAB, "");
+    }
+
+    public static ScreenActionPayload selectTab(BlockPos pos, int sideOrdinal, int index) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_SELECT_TAB, Integer.toString(index));
+    }
+
+    public static ScreenActionPayload closeTab(BlockPos pos, int sideOrdinal, int index) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_CLOSE_TAB, Integer.toString(index));
+    }
+
+    public static ScreenActionPayload mediaState(BlockPos pos, int sideOrdinal, int tabIndex,
+                                                  double timeSeconds, boolean playing, String event) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_MEDIA_STATE,
+                tabIndex + "," + timeSeconds + "," + playing + "," + event);
     }
 
     public static ScreenActionPayload setResolution(BlockPos pos, int sideOrdinal, int width, int height) {

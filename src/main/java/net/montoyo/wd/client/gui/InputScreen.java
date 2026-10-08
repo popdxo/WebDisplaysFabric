@@ -124,12 +124,8 @@ public class InputScreen extends Screen {
     }
 
     private void openBookmark(String url) {
-        Object browser = getBrowser();
-        if (browser == null) return;
-        try {
-            if (MCEFHelper.loadBrowserUrl(browser, ScreenBlockEntity.url(url))) refreshAddress();
-        } catch (java.io.IOException ignored) {
-        }
+        addressBar.setValue(url);
+        navigate();
     }
 
     private String clipText(String text, int maxWidth) {
@@ -144,13 +140,16 @@ public class InputScreen extends Screen {
         if (browser == null || addressBar == null) return;
         String value = addressBar.getValue().trim();
         if (value.isEmpty()) return;
+        String url;
         try {
-            String url = ScreenBlockEntity.url(value);
-            if (!MCEFHelper.loadBrowserUrl(browser, url)) return;
-            addressBar.setValue(url);
+            url = ScreenBlockEntity.url(value);
         } catch (java.io.IOException e) {
             return;
         }
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.setUrl(screenPos, screenSide.id, url).toPacket());
+        if (!MCEFHelper.loadBrowserUrl(browser, url)) return;
+        addressBar.setValue(url);
         addressBar.setFocused(false);
         setFocused(null);
     }
@@ -165,15 +164,21 @@ public class InputScreen extends Screen {
 
     private void selectTab(int index) {
         ScreenData data = getScreenData();
-        if (data != null && data.selectTab(index)) {
-            ScreenCursorTracker.clear();
-            rebuildWidgets();
+        if (data != null && index >= 0 && index < data.tabCount()) {
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.selectTab(screenPos, screenSide.id, index).toPacket());
+            if (data.selectTab(index)) {
+                ScreenCursorTracker.clear();
+                rebuildWidgets();
+            }
         }
     }
 
     private void addTab() {
         ScreenData data = getScreenData();
         if (data == null) return;
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.addTab(screenPos, screenSide.id).toPacket());
         Object browser = data.addTab(data.resolution.x, data.resolution.y);
         if (browser != null) {
             ScreenBlockEntity.ensureWindowOpenOverride(browser);
@@ -186,6 +191,8 @@ public class InputScreen extends Screen {
         ScreenData data = getScreenData();
         if (data == null || data.tabCount() <= 1) return;
         int oldIndex = data.activeTab();
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.closeTab(screenPos, screenSide.id, oldIndex).toPacket());
         data.removeTab(oldIndex);
         ScreenCursorTracker.clear();
         rebuildWidgets();
@@ -193,6 +200,10 @@ public class InputScreen extends Screen {
 
     private String getTabTitle(Object browser, int index) {
         String title = MCEFHelper.getBrowserTitle(browser);
+        if (title != null && title.startsWith("__WD_MEDIA__|")) {
+            String[] mediaTitle = title.split("\\|", 6);
+            title = mediaTitle.length >= 6 ? mediaTitle[5] : "";
+        }
         if (title == null || title.isBlank()) {
             title = MCEFHelper.getBrowserUrl(browser);
         }
