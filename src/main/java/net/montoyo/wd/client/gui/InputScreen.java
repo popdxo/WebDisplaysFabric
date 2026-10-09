@@ -146,12 +146,19 @@ public class InputScreen extends Screen {
         } catch (java.io.IOException e) {
             return;
         }
-        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
-                ScreenActionPayload.setUrl(screenPos, screenSide.id, url).toPacket());
+        if (!isSolo()) {
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.setUrl(screenPos, screenSide.id, url).toPacket());
+        }
         if (!MCEFHelper.loadBrowserUrl(browser, url)) return;
         addressBar.setValue(url);
         addressBar.setFocused(false);
         setFocused(null);
+    }
+
+    private boolean isSolo() {
+        ScreenData data = getScreenData();
+        return data != null && data.soloMode;
     }
 
     private void navigateHistory(boolean back) {
@@ -165,8 +172,10 @@ public class InputScreen extends Screen {
     private void selectTab(int index) {
         ScreenData data = getScreenData();
         if (data != null && index >= 0 && index < data.tabCount()) {
-            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
-                    ScreenActionPayload.selectTab(screenPos, screenSide.id, index).toPacket());
+            if (!data.soloMode) {
+                ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                        ScreenActionPayload.selectTab(screenPos, screenSide.id, index).toPacket());
+            }
             if (data.selectTab(index)) {
                 ScreenCursorTracker.clear();
                 rebuildWidgets();
@@ -177,8 +186,10 @@ public class InputScreen extends Screen {
     private void addTab() {
         ScreenData data = getScreenData();
         if (data == null) return;
-        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
-                ScreenActionPayload.addTab(screenPos, screenSide.id).toPacket());
+        if (!data.soloMode) {
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.addTab(screenPos, screenSide.id).toPacket());
+        }
         Object browser = data.addTab(data.resolution.x, data.resolution.y);
         if (browser != null) {
             ScreenBlockEntity.ensureWindowOpenOverride(browser);
@@ -191,8 +202,10 @@ public class InputScreen extends Screen {
         ScreenData data = getScreenData();
         if (data == null || data.tabCount() <= 1) return;
         int oldIndex = data.activeTab();
-        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
-                ScreenActionPayload.closeTab(screenPos, screenSide.id, oldIndex).toPacket());
+        if (!data.soloMode) {
+            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                    ScreenActionPayload.closeTab(screenPos, screenSide.id, oldIndex).toPacket());
+        }
         data.removeTab(oldIndex);
         ScreenCursorTracker.clear();
         rebuildWidgets();

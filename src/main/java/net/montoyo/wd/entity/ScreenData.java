@@ -20,6 +20,20 @@ public class ScreenData {
     public boolean autoVolume;
     public boolean autoSize = true;
     public boolean autoResolution = true;
+    public boolean hybridMode;
+    /** Solo: every player uses their own browser on this display; nothing is synced or permission-gated. */
+    public boolean soloMode;
+    /** Hybrid viewers: where the owner's cursor currently is on this display (block-local hit coordinates). */
+    public boolean remoteCursorVisible;
+    public float remoteCursorX, remoteCursorY, remoteCursorZ;
+    public long remoteCursorAt;
+    public long hybridSeenAt;
+    public long lastHybridRequestAt;
+    public String hybridSessionId;
+    public String hybridOwnerToken;
+    public String hybridViewerToken;
+    public String hybridSessionUrl;
+    public String hybridBaseUrl;
     public String owner;
     public String ownerUuid;
     public String url;
@@ -41,6 +55,8 @@ public class ScreenData {
     public long lastClickTime;
     public String lastUrl = ""; // for detecting page navigation
     public String lastReportedUrl = "";
+    public long urlSyncCooldownUntil;
+    public long lastServerUrlSyncTime;
     public double zoomLevel = 1.0; // browser page zoom (1.0 = 100%)
 
     public ScreenData(BlockSide side, Vector2i resolution, Vector2i size, String owner) {
@@ -180,6 +196,30 @@ public class ScreenData {
         activeTab = Math.min(activeTab, browserTabs.size() - 1);
         browser = browserTabs.get(activeTab);
         return true;
+    }
+
+    /** Keeps only the active browser, pointed at {@code url} (used when a viewer switches to a Hybrid stream page). */
+    public void collapseToSingleTab(String url) {
+        for (int i = browserTabs.size() - 1; i >= 0; i--) {
+            Object tab = browserTabs.get(i);
+            if (tab != browser) {
+                browserTabs.remove(i);
+                MCEFHelper.closeBrowser(tab);
+            }
+        }
+        tabUrls.clear();
+        tabUrls.add(url);
+        activeTab = 0;
+    }
+
+    /** Forgets the Hybrid session; the owner's stream (if any) is stopped. */
+    public void clearHybridSession() {
+        if (hybridSessionId != null) net.montoyo.wd.client.mcef.HybridFrameCapture.stopSession(hybridSessionId);
+        hybridSessionId = null;
+        hybridOwnerToken = null;
+        hybridViewerToken = null;
+        hybridSessionUrl = null;
+        hybridBaseUrl = null;
     }
 
     public void unload() {

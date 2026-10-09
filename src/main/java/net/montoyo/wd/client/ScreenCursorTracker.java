@@ -44,7 +44,53 @@ public class ScreenCursorTracker {
         return currentCursor != null && cursorVisible;
     }
 
+    private static boolean isOwner(Minecraft mc, ScreenData data) {
+        return data.ownerUuid != null
+                ? mc.player.getUUID().toString().equals(data.ownerUuid)
+                : mc.player.getGameProfile().getName().equals(data.owner);
+    }
+
+    // --- Hybrid: tell the server where the owner's cursor is so viewers can draw it ---
+    private static long lastCursorSendAt;
+    private static boolean cursorSentVisible;
+    private static BlockPos cursorSentPos;
+    private static BlockSide cursorSentSide;
+    private static double cursorSentX, cursorSentY, cursorSentZ;
+
+    private static void syncOwnerCursor(Minecraft mc) {
+        CursorInfo c = currentCursor;
+        boolean active = c != null && c.screenData != null && c.screenData.hybridMode && isOwner(mc, c.screenData);
+        long now = System.currentTimeMillis();
+        net.minecraft.resources.ResourceLocation channel = new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action");
+        if (active) {
+            double dx = c.localX - cursorSentX, dy = c.localY - cursorSentY, dz = c.localZ - cursorSentZ;
+            boolean moved = !cursorSentVisible || !c.pos.equals(cursorSentPos) || c.side != cursorSentSide
+                    || dx * dx + dy * dy + dz * dz > 1e-6;
+            // ~20 Hz while moving, plus a heartbeat so viewers don't time the cursor out while it rests.
+            if (now - lastCursorSendAt >= 50 && (moved || now - lastCursorSendAt >= 500)) {
+                lastCursorSendAt = now;
+                cursorSentVisible = true;
+                cursorSentPos = c.pos;
+                cursorSentSide = c.side;
+                cursorSentX = c.localX;
+                cursorSentY = c.localY;
+                cursorSentZ = c.localZ;
+                net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(channel,
+                        net.montoyo.wd.network.ScreenActionPayload.cursor(c.pos, c.side.id, true, c.localX, c.localY, c.localZ).toPacket());
+            }
+        } else if (cursorSentVisible) {
+            cursorSentVisible = false;
+            net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(channel,
+                    net.montoyo.wd.network.ScreenActionPayload.cursor(cursorSentPos, cursorSentSide.id, false, 0, 0, 0).toPacket());
+        }
+    }
+
     public static void update(Minecraft mc) {
+        updateInternal(mc);
+        if (mc.player != null) syncOwnerCursor(mc);
+    }
+
+    private static void updateInternal(Minecraft mc) {
         if (mc.level == null || mc.player == null || !cursorVisible) {
             if (currentCursor != null) {
                 if (leftButtonPressed) {
@@ -73,6 +119,10 @@ public class ScreenCursorTracker {
             for (int i = 0; i < screen.screenCount(); i++) {
                 ScreenData data = screen.getScreen(i);
                 if (data == null) continue;
+                boolean owner = data.ownerUuid != null
+                        ? mc.player.getUUID().toString().equals(data.ownerUuid)
+                        : mc.player.getGameProfile().getName().equals(data.owner);
+                if (data.hybridMode && !owner) continue;
 
                 BlockPos bp = screen.getBlockPos();
                 double bx = bp.getX(), by = bp.getY(), bz = bp.getZ();
@@ -135,6 +185,8 @@ public class ScreenCursorTracker {
             }
         }
 
+        if (best != null && best.screenData.hybridMode && !isOwner(mc, best.screenData)) best = null;
+
         if (best != null) {
             long now = System.currentTimeMillis();
             if (best.screenData.browser != null && (currentCursor == null ||
@@ -159,6 +211,11 @@ public class ScreenCursorTracker {
 
     public static void handleLeftClick(Minecraft mc) {
         if (mc.level == null || mc.player == null) return;
+        if (currentCursor != null && currentCursor.screenData != null
+                && currentCursor.screenData.hybridMode && !isOwner(mc, currentCursor.screenData)) {
+            if (leftButtonPressed) releaseLeftButton();
+            return;
+        }
         if (!cursorVisible) return;
         if (currentCursor == null || currentCursor.screenData == null || currentCursor.screenData.browser == null) return;
 
@@ -207,6 +264,7 @@ public class ScreenCursorTracker {
         if (!cursorVisible) return;
         if (currentCursor == null || currentCursor.screenData == null || currentCursor.screenData.browser == null) return;
         Minecraft mc = Minecraft.getInstance();
+        if (currentCursor.screenData.hybridMode && !isOwner(mc, currentCursor.screenData)) return;
         if (mc.player == null) return;
 
         if (mc.player.isShiftKeyDown()) {

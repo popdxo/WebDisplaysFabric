@@ -2,6 +2,7 @@ package net.montoyo.wd.client.mcef;
 
 import java.lang.reflect.Method;
 import java.util.function.Consumer;
+import java.util.Map;
 import java.util.Set;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -18,7 +19,7 @@ public class MCEFHelper {
     private static boolean available = false;
     private static boolean checked = false;
     private static final ConcurrentHashMap<String, Method> methodCache = new ConcurrentHashMap<>();
-    private static final Set<Object> consoleListeners = Collections.newSetFromMap(new IdentityHashMap<>());
+    private static final Map<Object, Set<String>> consoleListeners = Collections.synchronizedMap(new IdentityHashMap<>());
 
     public static boolean isMCEFAvailable() {
         if (!checked) {
@@ -158,7 +159,14 @@ public class MCEFHelper {
     }
 
     public static void registerConsoleMessageListener(Object browser, Consumer<String> listener) {
-        if (browser == null || !consoleListeners.add(browser)) return;
+        registerConsoleMessageListener(browser, "default", listener);
+    }
+
+    /** Registers at most one listener per (browser, key); several independent keys may coexist on one browser. */
+    public static void registerConsoleMessageListener(Object browser, String key, Consumer<String> listener) {
+        if (browser == null) return;
+        Set<String> keys = consoleListeners.computeIfAbsent(browser, ignored -> ConcurrentHashMap.newKeySet());
+        if (!keys.add(key)) return;
         try {
             Class<?> mcefClass = Class.forName("com.cinemamod.mcef.MCEF");
             Object client = mcefClass.getMethod("getClient").invoke(null);
@@ -175,7 +183,7 @@ public class MCEFHelper {
             if (addHandler == null) throw new NoSuchMethodException("MCEFClient.addDisplayHandler");
             addHandler.invoke(client, proxy);
         } catch (Exception e) {
-            consoleListeners.remove(browser);
+            keys.remove(key);
             Log.warning("Failed to register browser console listener: {}", e.getMessage());
         }
     }
@@ -205,6 +213,8 @@ public class MCEFHelper {
     }
 
     public static void closeBrowser(Object browser) {
+        HybridFrameCapture.unregister(browser);
+        consoleListeners.remove(browser);
         try {
             Method execJSMethod = findCachedMethod(browser.getClass(), "executeJavaScript", String.class, String.class, int.class);
             if (execJSMethod != null) {
@@ -233,6 +243,26 @@ public class MCEFHelper {
         } catch (Exception e) {
             Log.warning("Failed to close browser: {}", e.getMessage());
         }
+    }
+
+    /** Client only: is the local player the given display owner? */
+    public static boolean isLocalPlayerOwner(String owner, String ownerUuid) {
+        net.minecraft.client.player.LocalPlayer player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player == null) return false;
+        return ownerUuid != null ? player.getUUID().toString().equals(ownerUuid)
+                : player.getGameProfile().getName().equals(owner);
+    }
+
+    /** Forces CEF to repaint (OSR browsers only paint on change, so static pages would never feed a stream). */
+    public static void requestRepaint(Object browser) {
+        if (browser == null) return;
+        try {
+            browser.getClass().getMethod("invalidate").invoke(browser);
+            return;
+        } catch (Exception ignored) {
+        }
+        injectJavascript(browser, "(function(){var d=document.documentElement;if(!d)return;d.style.outline='1px solid transparent';"
+                + "requestAnimationFrame(function(){d.style.outline=''})})()");
     }
 
     public static void resizeBrowser(Object browser, int width, int height) {

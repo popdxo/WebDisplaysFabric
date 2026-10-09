@@ -34,6 +34,54 @@ public class ScreenBlockEntity extends BlockEntity {
     private static volatile boolean clientScreensDirty = true;
     private static List<ScreenBlockEntity> clientScreensSnapshot = List.of();
 
+    /** Client only: closes every browser (stopping audio) and Hybrid stream; used when leaving a world/server. */
+    public static void shutdownAllClientScreens() {
+        List<ScreenBlockEntity> all;
+        synchronized (clientScreens) {
+            all = new ArrayList<>(clientScreens);
+            clientScreens.clear();
+            clientScreensDirty = true;
+        }
+        for (ScreenBlockEntity entity : all) {
+            for (ScreenData data : entity.screens) {
+                data.clearHybridSession();
+                data.hybridSeenAt = 0;
+                data.unload();
+            }
+            entity.loaded = false;
+        }
+    }
+
+    /** Loaded server-side screens, used to reset ownership when an owner leaves. */
+    private static final java.util.Set<ScreenBlockEntity> serverScreens = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Server only: displays owned by the player lose their owner; Hybrid displays fall back to Sync. */
+    public static void releaseOwnedBy(java.util.UUID uuid, String name) {
+        for (ScreenBlockEntity entity : serverScreens) {
+            boolean changed = false;
+            for (ScreenData data : new ArrayList<>(entity.screens)) {
+                boolean owned = data.ownerUuid != null ? data.ownerUuid.equals(uuid.toString())
+                        : data.owner != null && data.owner.equals(name);
+                if (!owned) continue;
+                data.owner = null;
+                data.ownerUuid = null;
+                if (data.hybridMode) {
+                    entity.setMode(data.side, "sync");
+                    net.montoyo.wd.network.HybridSignalRelay.forgetSession(data.hybridSessionId);
+                    data.hybridSessionId = null;
+                    data.hybridViewerToken = null;
+                }
+                changed = true;
+            }
+            if (changed) {
+                entity.setChanged();
+                if (entity.level != null) {
+                    entity.level.sendBlockUpdated(entity.worldPosition, entity.getBlockState(), entity.getBlockState(), 3);
+                }
+            }
+        }
+    }
+
     public static List<ScreenBlockEntity> getClientScreens() {
         if (clientScreensDirty) {
             synchronized (clientScreens) {
@@ -65,11 +113,26 @@ public class ScreenBlockEntity extends BlockEntity {
                 }
             }
             load();
+        } else {
+            serverScreens.add(this);
+            // Hybrid sessions live only in memory, so a display that loads as Hybrid (server restart, chunk
+            // reload) has no stream behind it: fall back to Sync.
+            boolean reset = false;
+            for (ScreenData data : screens) {
+                if (data.hybridMode) {
+                    data.hybridMode = false;
+                    data.hybridSessionId = null;
+                    data.hybridViewerToken = null;
+                    reset = true;
+                }
+            }
+            if (reset) setChanged();
         }
     }
 
     @Override
     public void setRemoved() {
+        serverScreens.remove(this);
         if (level != null && level.isClientSide) {
             for (ScreenData screen : screens) {
                 if (screen.browser != null) {
@@ -230,6 +293,18 @@ public class ScreenBlockEntity extends BlockEntity {
         updateAABB();
         if (level != null && !level.isClientSide) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
         return true;
+    }
+
+    /** @param mode "sync", "solo" or "hybrid" */
+    public void setMode(BlockSide side, String mode) {
+        ScreenData screen = getScreen(side);
+        if (screen == null) return;
+        screen.hybridMode = "hybrid".equals(mode);
+        screen.soloMode = "solo".equals(mode);
+        setChanged();
+        if (level != null && !level.isClientSide) {
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        }
     }
 
     public void setAutoResolution(BlockSide side, boolean enabled) {
@@ -547,6 +622,8 @@ public class ScreenBlockEntity extends BlockEntity {
             screenTag.putBoolean("autoVolume", screen.autoVolume);
             screenTag.putBoolean("autoSize", screen.autoSize);
             screenTag.putBoolean("autoResolution", screen.autoResolution);
+            screenTag.putBoolean("hybridMode", screen.hybridMode);
+            screenTag.putBoolean("soloMode", screen.soloMode);
             if (screen.owner != null) screenTag.putString("owner", screen.owner);
             if (screen.ownerUuid != null) screenTag.putString("ownerUuid", screen.ownerUuid);
             if (screen.url != null) screenTag.putString("url", screen.url);
@@ -586,6 +663,8 @@ public class ScreenBlockEntity extends BlockEntity {
                 boolean autoVol = screenTag.getBoolean("autoVolume");
                 boolean autoSize = !screenTag.contains("autoSize") || screenTag.getBoolean("autoSize");
                 boolean autoResolution = !screenTag.contains("autoResolution") || screenTag.getBoolean("autoResolution");
+                boolean hybridMode = screenTag.getBoolean("hybridMode");
+                boolean soloMode = screenTag.getBoolean("soloMode");
                 String owner = screenTag.contains("owner") ? screenTag.getString("owner") : null;
                 String ownerUuid = screenTag.contains("ownerUuid") ? screenTag.getString("ownerUuid") : null;
                 String url = screenTag.contains("url") ? screenTag.getString("url") : null;
@@ -629,17 +708,27 @@ public class ScreenBlockEntity extends BlockEntity {
                 screen.mediaPlaying = mediaPlaying;
                 screen.mediaRevision = mediaRevision;
                 screen.mediaUpdatedAt = mediaUpdatedAt;
-                if (mediaChanged && level != null && level.isClientSide && screen.browser != null) {
+                if (mediaChanged && !soloMode && !hybridMode && level != null && level.isClientSide && screen.browser != null) {
                     screen.applyMediaState();
                 }
                 screen.autoVolume = autoVol;
                 screen.autoSize = autoSize;
                 screen.autoResolution = autoResolution;
+                boolean wasHybrid = screen.hybridMode;
+                screen.hybridMode = hybridMode;
+                screen.soloMode = soloMode;
+                boolean clientSide = level != null && level.isClientSide;
+                if (clientSide && wasHybrid && !hybridMode) screen.clearHybridSession();
+                // Solo and Hybrid displays keep their own local tabs (Hybrid: the owner's browser is the source, the
+                // server never learns its URLs); the server's tab list must not override them. Leaving Hybrid
+                // restores the shared tabs.
+                boolean keepLocalTabs = clientSide && !(wasHybrid && !hybridMode) && (soloMode || hybridMode);
                 screen.url = url;
                 if (tabUrls.isEmpty()) tabUrls.add(url == null ? "about:blank" : url);
                 int previousActiveTab = screen.activeTab();
-                screen.setActiveTabIndex(Math.max(0, Math.min(activeTab, tabUrls.size() - 1)));
-                boolean tabsChanged = !screen.tabUrls.equals(tabUrls) || previousActiveTab != screen.activeTab();
+                if (!keepLocalTabs) screen.setActiveTabIndex(Math.max(0, Math.min(activeTab, tabUrls.size() - 1)));
+                boolean tabsChanged = !keepLocalTabs
+                        && (!screen.tabUrls.equals(tabUrls) || previousActiveTab != screen.activeTab());
                 if (tabsChanged) {
                     screen.tabUrls.clear();
                     screen.tabUrls.addAll(tabUrls);
@@ -647,7 +736,7 @@ public class ScreenBlockEntity extends BlockEntity {
                         screen.reconcileTabs(tabUrls, activeTab);
                     }
                 }
-                if (screen.tabUrls.isEmpty()) screen.tabUrls.addAll(tabUrls);
+                if (screen.tabUrls.isEmpty() && !keepLocalTabs) screen.tabUrls.addAll(tabUrls);
 
                 screens.add(screen);
             }

@@ -37,11 +37,17 @@ public class GuiScreenConfig extends Screen {
 
     @Override
     protected void init() {
-        int cx = width / 2;
-        int top = Math.max(12, height / 2 - (isNew ? 100 : 148));
+        int cx = virtualWidth() / 2;
+        int top = Math.max(12, virtualHeight() / 2 - (isNew ? 100 : 148));
         net.minecraft.world.level.block.entity.BlockEntity be = Minecraft.getInstance().level.getBlockEntity(blockPos);
         if (be instanceof ScreenBlockEntity sbe) screen = sbe.getScreen(side);
         if (!isNew && screen == null) {
+            onClose();
+            return;
+        }
+        if (!isNew && screen.hybridMode && !isDisplayOwner(screen)) {
+            Minecraft.getInstance().player.displayClientMessage(
+                    Component.literal("Only the display owner can change this Hybrid display."), true);
             onClose();
             return;
         }
@@ -72,6 +78,10 @@ public class GuiScreenConfig extends Screen {
             resolutionHeightInput.active = false;
             addRenderableWidget(resolutionWidthInput);
             addRenderableWidget(resolutionHeightInput);
+
+            row += 23;
+            addRenderableWidget(Button.builder(Component.literal("Mode: " + modeLabel(screen)),
+                    this::cycleMode).bounds(cx - 95, row, 190, 20).build());
 
             row += 23;
             addRenderableWidget(Button.builder(Component.literal("Apply"), b -> applySettings())
@@ -106,6 +116,14 @@ public class GuiScreenConfig extends Screen {
             addRenderableWidget(Button.builder(Component.literal("Create"), b -> createScreen())
                     .bounds(cx - 45, row, 90, 20).build());
         }
+    }
+
+    private boolean isDisplayOwner(ScreenData data) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return false;
+        return data.ownerUuid != null
+                ? mc.player.getUUID().toString().equals(data.ownerUuid)
+                : mc.player.getGameProfile().getName().equals(data.owner);
     }
 
     private EditBox numberField(int x, int y, int fieldWidth, int value, int maxLength) {
@@ -186,6 +204,19 @@ public class GuiScreenConfig extends Screen {
         if (resolutionWidthInput != null) resolutionWidthInput.active = !screen.autoResolution;
     }
 
+    private static String modeLabel(ScreenData data) {
+        return data.hybridMode ? "Hybrid" : data.soloMode ? "Solo" : "Sync";
+    }
+
+    /** Sync -> Solo -> Hybrid -> Sync. The server owns the mode; flags update when its block update arrives. */
+    private void cycleMode(Button button) {
+        if (screen == null) return;
+        String next = screen.hybridMode ? "sync" : screen.soloMode ? "hybrid" : "solo";
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.setMode(blockPos, side.id, next).toPacket());
+        button.setMessage(Component.literal("Mode: " + Character.toUpperCase(next.charAt(0)) + next.substring(1)));
+    }
+
     private void adjustZoom(double delta) {
         if (screen != null) ScreenCursorTracker.adjustZoom(screen, delta);
     }
@@ -232,22 +263,66 @@ public class GuiScreenConfig extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        int cx = width / 2;
-        int top = Math.max(12, height / 2 - (isNew ? 100 : 148));
+        graphics.pose().pushPose();
+        graphics.pose().scale(UI_SCALE, UI_SCALE, 1.0f);
+        int cx = virtualWidth() / 2;
+        int top = Math.max(12, virtualHeight() / 2 - (isNew ? 100 : 148));
         graphics.drawCenteredString(font, "Display Configuration", cx, top - 2, 0xFFFFFF);
         graphics.drawString(font, "Blocks W × H", cx - 95, top + 13, 0xBBBBBB);
         if (!isNew) {
             graphics.drawString(font, "Resolution W × H (fixed ratio)", cx - 95, top + 71, 0xBBBBBB);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, scaled(mouseX), scaled(mouseY), partialTick);
         if (fitError != null) {
-            int errorY = Math.min(height - 24, top + (isNew ? 76 : 238));
+            int errorY = Math.min(virtualHeight() - 24, top + (isNew ? 76 : 238));
             graphics.drawCenteredString(font, fitError, cx, errorY, 0xFF5555);
         }
         if (!isNew && screen != null) {
             graphics.drawCenteredString(font,
                     "Page scale " + (int) Math.round(screen.zoomLevel * 100) + "%", cx, top + 211, 0xAAAAAA);
         }
+        graphics.pose().popPose();
+    }
+
+    // The whole menu is drawn at UI_SCALE so it fits on small windows; layout runs in unscaled coordinates and
+    // mouse input is mapped back into them.
+    private static final float UI_SCALE = 0.9f;
+
+    private int virtualWidth() {
+        return (int) (width / UI_SCALE);
+    }
+
+    private int virtualHeight() {
+        return (int) (height / UI_SCALE);
+    }
+
+    private static int scaled(double coordinate) {
+        return (int) (coordinate / UI_SCALE);
+    }
+
+    @Override
+    public boolean mouseClicked(double x, double y, int button) {
+        return super.mouseClicked(x / UI_SCALE, y / UI_SCALE, button);
+    }
+
+    @Override
+    public boolean mouseReleased(double x, double y, int button) {
+        return super.mouseReleased(x / UI_SCALE, y / UI_SCALE, button);
+    }
+
+    @Override
+    public boolean mouseDragged(double x, double y, int button, double dx, double dy) {
+        return super.mouseDragged(x / UI_SCALE, y / UI_SCALE, button, dx / UI_SCALE, dy / UI_SCALE);
+    }
+
+    @Override
+    public boolean mouseScrolled(double x, double y, double delta) {
+        return super.mouseScrolled(x / UI_SCALE, y / UI_SCALE, delta);
+    }
+
+    @Override
+    public void mouseMoved(double x, double y) {
+        super.mouseMoved(x / UI_SCALE, y / UI_SCALE);
     }
 
     @Override

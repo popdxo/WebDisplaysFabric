@@ -41,10 +41,14 @@ public class GuiSetURL extends Screen {
                     if (!url.isEmpty()) {
                         try {
                             String finalUrl = ScreenBlockEntity.url(url);
-                            ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
-                                    ScreenActionPayload.setUrl(blockPos, side.id, finalUrl).toPacket());
                             net.minecraft.world.level.block.entity.BlockEntity be =
                                     Minecraft.getInstance().level.getBlockEntity(blockPos);
+                            boolean solo = be instanceof ScreenBlockEntity sbe && sbe.getScreen(side) != null
+                                    && sbe.getScreen(side).soloMode;
+                            if (!solo) { // Solo displays navigate locally only
+                                ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                                        ScreenActionPayload.setUrl(blockPos, side.id, finalUrl).toPacket());
+                            }
                             if (be instanceof ScreenBlockEntity screen) {
                                 screen.setScreenURL(side, finalUrl);
                             }

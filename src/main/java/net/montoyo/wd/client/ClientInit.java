@@ -20,7 +20,10 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.montoyo.wd.client.gui.GuiScreenConfig;
 import net.montoyo.wd.client.gui.InputScreen;
+import net.montoyo.wd.network.ScreenActionPayload;
 import net.montoyo.wd.client.mcef.MCEFHelper;
+import net.montoyo.wd.client.mcef.HybridFrameCapture;
+import net.montoyo.wd.client.mcef.HybridViewerPage;
 import net.montoyo.wd.entity.KeyboardBlockEntity;
 import net.montoyo.wd.entity.ScreenBlockEntity;
 import net.montoyo.wd.entity.ScreenData;
@@ -48,9 +51,83 @@ public class ClientInit implements ClientModInitializer {
     private static boolean wasZoomOutDown;
     private static boolean wasZoomResetDown;
     private static boolean wasScreenOpen;
+    private static final java.util.Map<String, PendingHybridViewer> PENDING_HYBRID_VIEWERS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record PendingHybridViewer(BlockPos pos, BlockSide side, String sessionId, String token, String baseUrl,
+                                       long expiresAt) {}
+
+    public static void sendHybridSignal(BlockPos pos, int sideId, String sessionId, String peerId, String json) {
+        net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        buf.writeBlockPos(pos);
+        buf.writeVarInt(sideId);
+        buf.writeUtf(peerId, 64);
+        buf.writeUtf(sessionId, 128);
+        buf.writeUtf(json, 32_000);
+        ClientPlayNetworking.send(ScreenActionPayload.HYBRID_SIGNAL, buf);
+    }
+
+    private static HybridFrameCapture.SignalSender signalSender(BlockPos pos, int sideId, String sessionId) {
+        return (peerId, json) -> sendHybridSignal(pos, sideId, sessionId, peerId, json);
+    }
 
     public static boolean isMCEFRenderingEnabled() {
         return mcefRenderingEnabled;
+    }
+
+    private static void tryOpenHybridViewers(Minecraft client) {
+        if (client.level == null || client.player == null || PENDING_HYBRID_VIEWERS.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        for (var entry : PENDING_HYBRID_VIEWERS.entrySet()) {
+            PendingHybridViewer pending = entry.getValue();
+            if (now >= pending.expiresAt()) {
+                PENDING_HYBRID_VIEWERS.remove(entry.getKey(), pending);
+                Log.warning("Timed out waiting for Hybrid display at {} side {} to load", pending.pos(), pending.side());
+                continue;
+            }
+            BlockEntity blockEntity = client.level.getBlockEntity(pending.pos());
+            if (!(blockEntity instanceof ScreenBlockEntity screen)) continue;
+            ScreenData data = screen.getScreen(pending.side());
+            if (data == null) continue;
+            data.hybridMode = true;
+            data.soloMode = false;
+            // The viewer page is built into the client and signals through the Minecraft connection, so it works
+            // wherever the game connection works (no extra port to expose).
+            String viewerUrl = HybridViewerPage.dataUrl();
+            data.hybridSessionId = pending.sessionId();
+            data.hybridViewerToken = pending.token();
+            data.hybridBaseUrl = pending.baseUrl();
+            data.hybridSessionUrl = viewerUrl;
+            data.url = viewerUrl;
+            data.lastUrl = viewerUrl;
+            data.lastReportedUrl = viewerUrl;
+            if (data.browser == null) screen.load();
+            if (data.browser == null) continue;
+            // Viewers only see the owner's stream: drop their other tabs and show just the stream page.
+            data.collapseToSingleTab(viewerUrl);
+            final BlockPos signalPos = pending.pos();
+            final int signalSide = pending.side().id;
+            MCEFHelper.registerConsoleMessageListener(data.browser, "wd-hybrid-signal", message -> {
+                if (message.startsWith(HybridViewerPage.LOG_PREFIX)) {
+                    Log.info("Hybrid viewer page at {}: {}", signalPos, message.substring(HybridViewerPage.LOG_PREFIX.length()));
+                    return;
+                }
+                if (!message.startsWith(HybridViewerPage.SIGNAL_PREFIX)) return;
+                String[] parts = message.split("\\|", 3);
+                if (parts.length != 3) return;
+                // Console callbacks arrive on a CEF thread; send from the game thread.
+                Minecraft.getInstance().execute(() -> {
+                    if (data.hybridSessionId == null) {
+                        Log.warning("Hybrid viewer signal dropped: no session for display at {}", signalPos);
+                        return;
+                    }
+                    sendHybridSignal(signalPos, signalSide, data.hybridSessionId, parts[1], parts[2]);
+                });
+            });
+            if (MCEFHelper.loadBrowserUrl(data.browser, viewerUrl)) {
+                PENDING_HYBRID_VIEWERS.remove(entry.getKey(), pending);
+                Log.info("Opened Hybrid viewer for display at {} side {}", pending.pos(), pending.side());
+            }
+        }
     }
 
     private static void openKeyboardInput(BlockPos screenPos, BlockSide screenSide,
@@ -71,6 +148,113 @@ public class ClientInit implements ClientModInitializer {
         restartCursorKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.webdisplays.restart_cursor", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_F7,
                 "category.webdisplays"));
+
+        // Leaving a world/server: the level is discarded without removing block entities, so browsers (and their
+        // audio) and Hybrid streams would keep running. Tear everything down explicitly.
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
+                client.execute(() -> {
+                    PENDING_HYBRID_VIEWERS.clear();
+                    ScreenCursorTracker.clear();
+                    ScreenBlockEntity.shutdownAllClientScreens();
+                    Log.info("Closed all WebDisplays browsers after disconnect");
+                }));
+
+        ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.HYBRID_SIGNAL,
+                (client, handler, buf, responseSender) -> {
+                    BlockPos displayPos = buf.readBlockPos();
+                    int sideOrdinal = buf.readVarInt();
+                    String peerId = buf.readUtf(64);
+                    String sessionId = buf.readUtf(128);
+                    String json = buf.readUtf(32_000);
+                    client.execute(() -> {
+                        if (client.level == null
+                                || !(client.level.getBlockEntity(displayPos) instanceof ScreenBlockEntity screen)) return;
+                        ScreenData data = screen.getScreen(BlockSide.fromInt(sideOrdinal));
+                        if (data == null) return;
+                        if (MCEFHelper.isLocalPlayerOwner(data.owner, data.ownerUuid)) {
+                            if (HybridSignalLog.once("owner-rx:" + sessionId + ":" + peerId)) {
+                                Log.info("Hybrid signal from viewer {} for session {}", peerId, sessionId);
+                            }
+                            HybridFrameCapture.onSignal(sessionId, peerId, json); // a viewer's join/answer
+                        } else if (data.browser == null || !sessionId.equals(data.hybridSessionId)) {
+                            Log.warning("Hybrid offer dropped for display at {}: browser={} session {} vs {}",
+                                    displayPos, data.browser != null, sessionId, data.hybridSessionId);
+                        } else {
+                            // The owner's offer for our viewer page.
+                            Log.info("Hybrid offer received from owner for display at {}", displayPos);
+                            MCEFHelper.injectJavascript(data.browser, "window.__wdSignal&&window.__wdSignal("
+                                    + new com.google.gson.JsonPrimitive(json) + ")");
+                        }
+                    });
+                });
+        ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.CURSOR_SYNC,
+                (client, handler, buf, responseSender) -> {
+                    BlockPos displayPos = buf.readBlockPos();
+                    int sideOrdinal = buf.readVarInt();
+                    boolean visible = buf.readBoolean();
+                    float x = buf.readFloat(), y = buf.readFloat(), z = buf.readFloat();
+                    client.execute(() -> {
+                        if (client.level == null) return;
+                        if (client.level.getBlockEntity(displayPos) instanceof ScreenBlockEntity screen) {
+                            ScreenData data = screen.getScreen(BlockSide.fromInt(sideOrdinal));
+                            if (data == null) return;
+                            data.remoteCursorVisible = visible;
+                            data.remoteCursorX = x;
+                            data.remoteCursorY = y;
+                            data.remoteCursorZ = z;
+                            data.remoteCursorAt = System.currentTimeMillis();
+                        }
+                    });
+                });
+        ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.HYBRID_SESSION,
+                (client, handler, buf, responseSender) -> {
+                    net.minecraft.core.BlockPos displayPos = buf.readBlockPos();
+                    int sideOrdinal = buf.readVarInt();
+                    String sessionId = buf.readUtf(128);
+                    String ownerToken = buf.readUtf(128);
+                    String viewerToken = buf.readUtf(128);
+                    String baseUrl = buf.readUtf(256);
+                    client.execute(() -> {
+                        if (client.player != null && client.level != null) {
+                            BlockSide side = BlockSide.fromInt(sideOrdinal);
+                            BlockEntity blockEntity = client.level.getBlockEntity(displayPos);
+                            if (blockEntity instanceof ScreenBlockEntity screen) {
+                                ScreenData data = screen.getScreen(side);
+                                if (data != null) {
+                                    data.hybridMode = true;
+                                    data.soloMode = false;
+                                    if (data.hybridSessionId != null && !data.hybridSessionId.equals(sessionId)) {
+                                        HybridFrameCapture.stopSession(data.hybridSessionId);
+                                    }
+                                    data.hybridSessionId = sessionId;
+                                    data.hybridOwnerToken = ownerToken;
+                                    data.hybridViewerToken = viewerToken;
+                                    data.hybridBaseUrl = baseUrl;
+                                    HybridFrameCapture.register(data.browser, baseUrl, sessionId, ownerToken,
+                                            signalSender(displayPos, side.id, sessionId));
+                                }
+                            }
+                            Log.info("Hybrid browser capture armed for session {} at {} side {}", sessionId, displayPos, side);
+                            client.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "Hybrid browser capture is active for this display."), false);
+                        }
+                    });
+                });
+        ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.HYBRID_VIEWER_SESSION,
+                (client, handler, buf, responseSender) -> {
+                    BlockPos displayPos = buf.readBlockPos();
+                    int sideOrdinal = buf.readVarInt();
+                    String sessionId = buf.readUtf(128);
+                    String viewerToken = buf.readUtf(128);
+                    String baseUrl = buf.readUtf(256);
+                    client.execute(() -> {
+                        BlockSide side = BlockSide.fromInt(sideOrdinal);
+                        String key = displayPos.asLong() + ":" + side.id;
+                        PENDING_HYBRID_VIEWERS.put(key, new PendingHybridViewer(displayPos, side, sessionId,
+                                viewerToken, baseUrl, System.currentTimeMillis() + 30_000));
+                        tryOpenHybridViewers(client);
+                    });
+                });
         ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.BOOKMARK_SYNC, (client, handler, buf, responseSender) -> {
             int count = Math.min(100, buf.readVarInt());
             java.util.ArrayList<String> urls = new java.util.ArrayList<>(count);
@@ -105,6 +289,7 @@ public class ClientInit implements ClientModInitializer {
 
         // Maintain cursor state across GUI transitions and refresh as soon as gameplay resumes.
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.level != null && client.player != null) tryOpenHybridViewers(client);
             if (client.level == null || client.player == null) {
                 ScreenCursorTracker.clear();
                 wasScreenOpen = false;
@@ -133,6 +318,37 @@ public class ClientInit implements ClientModInitializer {
                 if (screen.retryCreateBrowsers()) {
                     Log.info("Browser retry succeeded for screen at {}", screen.getBlockPos());
                 }
+
+                for (int i = 0; i < screen.screenCount(); i++) {
+                    ScreenData hybridData = screen.getScreen(i);
+                    if (hybridData == null || client.player == null) continue;
+                    if (!hybridData.hybridMode) {
+                        hybridData.hybridSeenAt = 0;
+                        continue;
+                    }
+                    if (hybridData.hybridSeenAt == 0) hybridData.hybridSeenAt = now;
+                    boolean localOwner = MCEFHelper.isLocalPlayerOwner(hybridData.owner, hybridData.ownerUuid);
+                    if (localOwner) {
+                        if (hybridData.hybridOwnerToken != null && hybridData.hybridBaseUrl != null) {
+                            // Always stream the currently selected tab; register() moves the stream when it changes.
+                            HybridFrameCapture.register(hybridData.browser, hybridData.hybridBaseUrl,
+                                    hybridData.hybridSessionId, hybridData.hybridOwnerToken,
+                                    signalSender(screen.getBlockPos(), hybridData.side.id, hybridData.hybridSessionId));
+                        } else if (now - hybridData.hybridSeenAt > 2000 && now - hybridData.lastHybridRequestAt > 3000) {
+                            hybridData.lastHybridRequestAt = now;
+                            ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
+                                    ScreenActionPayload.requestHybridSession(screen.getBlockPos(), hybridData.side.id).toPacket());
+                        }
+                    } else if (hybridData.hybridSessionUrl == null && now - hybridData.hybridSeenAt > 2000
+                            && now - hybridData.lastHybridRequestAt > 3000
+                            && !PENDING_HYBRID_VIEWERS.containsKey(screen.getBlockPos().asLong() + ":" + hybridData.side.id)) {
+                        // Joined (or reloaded) after the stream started: ask the server for the viewer link.
+                        hybridData.lastHybridRequestAt = now;
+                        ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
+                                ScreenActionPayload.requestHybridView(screen.getBlockPos(), hybridData.side.id).toPacket());
+                    }
+                }
+
                 if (shouldUpdateAudio) {
                     for (int i = 0; i < screen.screenCount(); i++) {
                         ScreenData data = screen.getScreen(i);
@@ -167,6 +383,7 @@ public class ClientInit implements ClientModInitializer {
                         boolean isOwner = client.player != null && (data.ownerUuid != null
                                 ? client.player.getUUID().toString().equals(data.ownerUuid)
                                 : client.player.getGameProfile().getName().equals(data.owner));
+
                         if (shouldSyncMedia && !data.mediaOwnerDiagnosticLogged) {
                             data.mediaOwnerDiagnosticLogged = true;
                             Log.info("Media sync owner check at {} side {}: player={} uuid={}, owner={} uuid={}, match={}",
@@ -203,7 +420,7 @@ public class ClientInit implements ClientModInitializer {
                                     String eventKey = data.activeTab() + ":" + eventId;
                                     boolean shouldSend = isAction ? !eventKey.equals(data.lastMediaEvent)
                                             : isOwner && pollMedia;
-                                    if (shouldSend) {
+                                    if (shouldSend && !data.soloMode && !data.hybridMode) {
                                         if (isAction) data.lastMediaEvent = eventKey;
                                         if (isOwner && !data.mediaPacketSentLogged) {
                                             data.mediaPacketSentLogged = true;
@@ -222,8 +439,9 @@ public class ClientInit implements ClientModInitializer {
                             data.lastUrl = currentUrl;
                             data.mediaReporterInstalled = false;
                             data.setTabUrl(data.activeTab(), currentUrl);
-                            if (!currentUrl.equals(data.lastReportedUrl)) {
+                            if (!data.hybridMode && !data.soloMode && !currentUrl.equals(data.lastReportedUrl) && now >= data.urlSyncCooldownUntil) {
                                 data.lastReportedUrl = currentUrl;
+                                data.urlSyncCooldownUntil = now + 1500;
                                 ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
                                         ScreenActionPayload.setUrl(screen.getBlockPos(), data.side.id, data.activeTab(), currentUrl).toPacket());
                             }
@@ -285,7 +503,10 @@ public class ClientInit implements ClientModInitializer {
                     && (client.player.getItemInHand(InteractionHand.MAIN_HAND).getItem() == WDRegistries.KEYBOARD_ITEM
                     || client.player.getItemInHand(InteractionHand.OFF_HAND).getItem() == WDRegistries.KEYBOARD_ITEM)) {
                 ScreenCursorTracker.CursorInfo cursor = ScreenCursorTracker.getCurrentCursor();
-                if (cursor != null && cursor.screenData != null) {
+                if (cursor != null && cursor.screenData != null && (!cursor.screenData.hybridMode
+                        || (cursor.screenData.ownerUuid != null
+                            ? client.player.getUUID().toString().equals(cursor.screenData.ownerUuid)
+                            : client.player.getGameProfile().getName().equals(cursor.screenData.owner)))) {
                     openKeyboardInput(cursor.pos, cursor.side, client.player);
                 }
             }
@@ -384,6 +605,12 @@ public class ClientInit implements ClientModInitializer {
                 if (player.getItemInHand(hand).getItem() == WDRegistries.CONFIGURATOR) {
                     BlockPos pos = hitResult.getBlockPos();
                     BlockSide side = BlockSide.fromDirection(hitResult.getDirection());
+                    ScreenData configured = screen.getScreen(side);
+                    if (configured != null && !MCEFHelper.isLocalPlayerOwner(configured.owner, configured.ownerUuid)) {
+                        // The server hands the display over only if it has no (online) owner.
+                        ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
+                                ScreenActionPayload.claimOwner(pos, side.id).toPacket());
+                    }
                     Minecraft.getInstance().setScreen(
                             new GuiScreenConfig(pos, side, !screen.hasScreen(side)));
                     return InteractionResult.SUCCESS;
@@ -408,6 +635,18 @@ public class ClientInit implements ClientModInitializer {
                 BlockSide screenSide = kb.getLinkedSide();
                 if (screenPos != null && screenSide != null) {
                     Minecraft mc = Minecraft.getInstance();
+                    BlockEntity linkedEntity = mc.level == null ? null : mc.level.getBlockEntity(screenPos);
+                    if (linkedEntity instanceof ScreenBlockEntity linkedScreen) {
+                        ScreenData linkedData = linkedScreen.getScreen(screenSide);
+                        if (linkedData != null && linkedData.hybridMode
+                                && (linkedData.ownerUuid != null
+                                    ? !mc.player.getUUID().toString().equals(linkedData.ownerUuid)
+                                    : !mc.player.getGameProfile().getName().equals(linkedData.owner))) {
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "Only the display owner can use this Hybrid display."), true);
+                            return InteractionResult.SUCCESS;
+                        }
+                    }
                     if (mc.screen instanceof InputScreen && ((InputScreen) mc.screen).isFor(screenPos, screenSide)) {
                         mc.setScreen(null);
                         player.displayClientMessage(net.minecraft.network.chat.Component.literal("Input mode: OFF"), true);

@@ -5,6 +5,8 @@ import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.network.FriendlyByteBuf;
 import net.montoyo.wd.entity.WorldBookmarks;
+import net.montoyo.wd.WebDisplays;
+import net.montoyo.wd.stream.HybridSessionManager;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
@@ -19,8 +21,10 @@ import net.montoyo.wd.utilities.math.Vector2i;
 public class ServerNetHandler {
 
     public static void register() {
+        HybridSignalRelay.register();
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
                 sendBookmarks(handler.getPlayer(), WorldBookmarks.get(server)));
+
         ServerPlayNetworking.registerGlobalReceiver(new ResourceLocation("webdisplays", "screen_action"), (server, player, handler, buf, responseSender) -> {
             ScreenActionPayload payload = ScreenActionPayload.read(buf);
             Level level = player.serverLevel();
@@ -41,6 +45,26 @@ public class ServerNetHandler {
                 if (!(be instanceof ScreenBlockEntity screen)) return;
 
                 BlockSide side = BlockSide.fromInt(payload.sideOrdinal());
+                ScreenData actionScreen = screen.getScreen(side);
+                boolean displayOwner = actionScreen != null && (actionScreen.ownerUuid != null
+                        ? player.getUUID().toString().equals(actionScreen.ownerUuid)
+                        : player.getName().getString().equals(actionScreen.owner));
+                if (actionScreen != null && actionScreen.hybridMode && !displayOwner
+                        && !ScreenActionPayload.ACTION_MEDIA_STATE.equals(payload.action())
+                        && !ScreenActionPayload.ACTION_CLAIM_OWNER.equals(payload.action())
+                        && !ScreenActionPayload.ACTION_REQUEST_HYBRID_VIEW.equals(payload.action())) {
+                    player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                            "Only the display owner can control this Hybrid display."), true);
+                    return;
+                }
+                if (actionScreen != null && (actionScreen.soloMode || actionScreen.hybridMode) && (ScreenActionPayload.ACTION_SET_URL.equals(payload.action())
+                        || ScreenActionPayload.ACTION_SYNC_TAB_URL.equals(payload.action())
+                        || ScreenActionPayload.ACTION_ADD_TAB.equals(payload.action())
+                        || ScreenActionPayload.ACTION_SELECT_TAB.equals(payload.action())
+                        || ScreenActionPayload.ACTION_CLOSE_TAB.equals(payload.action())
+                        || ScreenActionPayload.ACTION_MEDIA_STATE.equals(payload.action()))) {
+                    return; // Solo and Hybrid displays share no tab/URL/media state through the server
+                }
                 String owner = player.getName().getString();
 
                 switch (payload.action()) {
@@ -73,7 +97,7 @@ public class ServerNetHandler {
                     }
                     case ScreenActionPayload.ACTION_SET_URL -> {
                         ScreenData data = screen.getScreen(side);
-                        if (data != null && payload.extraData().length() <= 2048) {
+                        if (data != null && !data.hybridMode && payload.extraData().length() <= 2048) {
                             try {
                                 data.setTabUrl(data.activeTab(), ScreenBlockEntity.url(payload.extraData()));
                                 screen.setScreenURL(side, payload.extraData());
@@ -83,12 +107,15 @@ public class ServerNetHandler {
                     case ScreenActionPayload.ACTION_SYNC_TAB_URL -> {
                         ScreenData data = screen.getScreen(side);
                         String[] parts = payload.extraData().split("\\n", 2);
-                        if (data != null && parts.length == 2 && parts[1].length() <= 2048) {
+                        if (data != null && !data.hybridMode && parts.length == 2 && parts[1].length() <= 2048) {
                             try {
                                 int tabIndex = Integer.parseInt(parts[0]);
                                 String normalized = ScreenBlockEntity.url(parts[1]);
+                                long now = System.currentTimeMillis();
                                 if (tabIndex >= 0 && tabIndex < data.tabUrls.size()
-                                        && !normalized.equals(data.tabUrls.get(tabIndex))) {
+                                        && !normalized.equals(data.tabUrls.get(tabIndex))
+                                        && now - data.lastServerUrlSyncTime >= 250) {
+                                    data.lastServerUrlSyncTime = now;
                                     data.setTabUrl(tabIndex, normalized);
                                     if (tabIndex == data.activeTab()) data.url = normalized;
                                     screen.setChanged();
@@ -203,6 +230,101 @@ public class ServerNetHandler {
                     case ScreenActionPayload.ACTION_SET_AUTO_RESOLUTION -> {
                         screen.setAutoResolution(side, Boolean.parseBoolean(payload.extraData()));
                     }
+                    case ScreenActionPayload.ACTION_REQUEST_HYBRID_SESSION -> {
+                        ScreenData data = screen.getScreen(side);
+                        boolean isOwner = data != null && (data.ownerUuid != null
+                                ? player.getUUID().toString().equals(data.ownerUuid)
+                                : player.getName().getString().equals(data.owner));
+                        if (!isOwner || !data.hybridMode) return;
+                        startHybridSession(server, player, payload.pos(), side, data);
+                    }
+                    case ScreenActionPayload.ACTION_CURSOR -> {
+                        ScreenData data = screen.getScreen(side);
+                        if (data == null || !data.hybridMode || !displayOwner
+                                || !(level instanceof net.minecraft.server.level.ServerLevel serverLevel)) return;
+                        boolean visible = !"off".equals(payload.extraData());
+                        float cx = 0, cy = 0, cz = 0;
+                        if (visible) {
+                            String[] parts = payload.extraData().split(",");
+                            if (parts.length != 3) return;
+                            try {
+                                cx = Float.parseFloat(parts[0]);
+                                cy = Float.parseFloat(parts[1]);
+                                cz = Float.parseFloat(parts[2]);
+                            } catch (NumberFormatException e) {
+                                return;
+                            }
+                            if (!Float.isFinite(cx) || !Float.isFinite(cy) || !Float.isFinite(cz)
+                                    || Math.abs(cx) > 256 || Math.abs(cy) > 256 || Math.abs(cz) > 256) return;
+                        }
+                        for (ServerPlayer watcher : net.fabricmc.fabric.api.networking.v1.PlayerLookup.tracking(serverLevel, payload.pos())) {
+                            if (watcher.getUUID().equals(player.getUUID())) continue;
+                            FriendlyByteBuf cursorBuf = PacketByteBufs.create();
+                            cursorBuf.writeBlockPos(payload.pos());
+                            cursorBuf.writeVarInt(side.id);
+                            cursorBuf.writeBoolean(visible);
+                            cursorBuf.writeFloat(cx);
+                            cursorBuf.writeFloat(cy);
+                            cursorBuf.writeFloat(cz);
+                            ServerPlayNetworking.send(watcher, ScreenActionPayload.CURSOR_SYNC, cursorBuf);
+                        }
+                    }
+                    case ScreenActionPayload.ACTION_CLAIM_OWNER -> {
+                        ScreenData data = screen.getScreen(side);
+                        if (data == null) return;
+                        // Vacant = no owner, or the recorded owner is offline (covers displays that were unloaded
+                        // when their owner left).
+                        boolean vacant = (data.ownerUuid == null && data.owner == null)
+                                || (data.ownerUuid != null
+                                    ? server.getPlayerList().getPlayer(java.util.UUID.fromString(data.ownerUuid)) == null
+                                    : server.getPlayerList().getPlayerByName(data.owner) == null);
+                        if (vacant && !displayOwner) {
+                            data.owner = player.getName().getString();
+                            data.ownerUuid = player.getUUID().toString();
+                            data.hybridSessionId = null;
+                            data.hybridViewerToken = null;
+                            if (data.hybridMode) screen.setMode(side, "sync");
+                            screen.setChanged();
+                            level.sendBlockUpdated(payload.pos(), level.getBlockState(payload.pos()),
+                                    level.getBlockState(payload.pos()), 3);
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "You are now the owner of this display."), true);
+                        }
+                    }
+                    case ScreenActionPayload.ACTION_REQUEST_HYBRID_VIEW -> {
+                        ScreenData data = screen.getScreen(side);
+                        if (data == null || !data.hybridMode || data.hybridSessionId == null
+                                || WebDisplays.getInstance().getHybridWebService().findSession(data.hybridSessionId) == null) return;
+                        sendViewerSession(player, payload.pos(), side, data.hybridSessionId, data.hybridViewerToken);
+                    }
+                    case ScreenActionPayload.ACTION_SET_MODE -> {
+                        ScreenData data = screen.getScreen(side);
+                        boolean isOwner = data != null && (data.ownerUuid != null
+                                ? player.getUUID().toString().equals(data.ownerUuid)
+                                : player.getName().getString().equals(data.owner));
+                        if (isOwner) {
+                            String mode = payload.extraData();
+                            if (!"sync".equals(mode) && !"solo".equals(mode) && !"hybrid".equals(mode)) return;
+                            screen.setMode(side, mode);
+                            if (!"hybrid".equals(mode)) {
+                                HybridSignalRelay.forgetSession(data.hybridSessionId);
+                                data.hybridSessionId = null;
+                                data.hybridViewerToken = null;
+                            }
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "Display mode set to " + switch (mode) {
+                                        case "hybrid" -> "Hybrid (streamed from your browser)";
+                                        case "solo" -> "Solo (everyone uses their own browser)";
+                                        default -> "Sync";
+                                    }), true);
+                            if ("hybrid".equals(mode)) startHybridSession(server, player, payload.pos(), side, data);
+                        } else {
+                            Log.warning("Rejected display mode change from non-owner {} for display {} side {}",
+                                    player.getName().getString(), payload.pos(), side);
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "Only the display owner can change its mode."), true);
+                        }
+                    }
                     case ScreenActionPayload.ACTION_SET_ROTATION -> {
                         try {
                             int rot = Integer.parseInt(payload.extraData());
@@ -216,10 +338,44 @@ public class ServerNetHandler {
         });
     }
 
+
     private static void sendBookmarks(ServerPlayer player, WorldBookmarks bookmarks) {
         FriendlyByteBuf buf = PacketByteBufs.create();
         buf.writeVarInt(bookmarks.urls().size());
         for (String url : bookmarks.urls()) buf.writeUtf(url, 2048);
         ServerPlayNetworking.send(player, ScreenActionPayload.BOOKMARK_SYNC, buf);
+    }
+
+    /** Creates a Hybrid session, hands the owner its publish token and sends every other player the viewer link. */
+    private static void startHybridSession(net.minecraft.server.MinecraftServer server, ServerPlayer owner,
+                                           net.minecraft.core.BlockPos pos, BlockSide side, ScreenData data) {
+        HybridSignalRelay.forgetSession(data.hybridSessionId);
+        HybridSessionManager.Session session = WebDisplays.getInstance().getHybridWebService()
+                .createSession(pos.asLong() + ":" + side.id);
+        data.hybridSessionId = session.id();
+        data.hybridViewerToken = session.viewerToken();
+        FriendlyByteBuf ownerBuf = PacketByteBufs.create();
+        ownerBuf.writeBlockPos(pos);
+        ownerBuf.writeVarInt(side.id);
+        ownerBuf.writeUtf(session.id(), 128);
+        ownerBuf.writeUtf(session.ownerToken(), 128);
+        ownerBuf.writeUtf(session.viewerToken(), 128);
+        ownerBuf.writeUtf(WebDisplays.getInstance().getHybridWebBaseUrl(), 256);
+        ServerPlayNetworking.send(owner, ScreenActionPayload.HYBRID_SESSION, ownerBuf);
+        for (ServerPlayer online : server.getPlayerList().getPlayers()) {
+            if (online.getUUID().equals(owner.getUUID())) continue;
+            sendViewerSession(online, pos, side, session.id(), session.viewerToken());
+        }
+    }
+
+    private static void sendViewerSession(ServerPlayer target, net.minecraft.core.BlockPos pos, BlockSide side,
+                                          String sessionId, String viewerToken) {
+        FriendlyByteBuf viewerBuf = PacketByteBufs.create();
+        viewerBuf.writeBlockPos(pos);
+        viewerBuf.writeVarInt(side.id);
+        viewerBuf.writeUtf(sessionId, 128);
+        viewerBuf.writeUtf(viewerToken, 128);
+        viewerBuf.writeUtf(WebDisplays.getInstance().getHybridWebBaseUrl(), 256);
+        ServerPlayNetworking.send(target, ScreenActionPayload.HYBRID_VIEWER_SESSION, viewerBuf);
     }
 }
