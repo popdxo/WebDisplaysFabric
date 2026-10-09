@@ -13,6 +13,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.montoyo.wd.client.ScreenCursorTracker;
+import net.montoyo.wd.client.ScreenInput;
 import net.montoyo.wd.client.ClientBookmarks;
 import net.montoyo.wd.client.mcef.MCEFHelper;
 import net.montoyo.wd.entity.ScreenBlockEntity;
@@ -146,6 +147,13 @@ public class InputScreen extends Screen {
         } catch (java.io.IOException e) {
             return;
         }
+        ScreenData screenData = getScreenData();
+        if (ScreenInput.isRemote(screenData)) { // Hybrid viewer: the owner's browser navigates
+            ScreenInput.navigateRemote(screenData, screenPos, screenSide, url);
+            addressBar.setFocused(false);
+            setFocused(null);
+            return;
+        }
         if (!isSolo()) {
             ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
                     ScreenActionPayload.setUrl(screenPos, screenSide.id, url).toPacket());
@@ -171,6 +179,8 @@ public class InputScreen extends Screen {
 
     private void selectTab(int index) {
         ScreenData data = getScreenData();
+        // Viewers can't see the owner's tab list, so there is nothing to select remotely.
+        if (!ScreenInput.canType(data) || ScreenInput.isRemote(data)) return;
         if (data != null && index >= 0 && index < data.tabCount()) {
             if (!data.soloMode) {
                 ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
@@ -185,7 +195,11 @@ public class InputScreen extends Screen {
 
     private void addTab() {
         ScreenData data = getScreenData();
-        if (data == null) return;
+        if (data == null || !ScreenInput.canType(data)) return;
+        if (ScreenInput.isRemote(data)) { // Hybrid viewer: opens a tab in the owner's browser
+            ScreenInput.tabRemote(data, screenPos, screenSide, "tadd");
+            return;
+        }
         if (!data.soloMode) {
             ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
                     ScreenActionPayload.addTab(screenPos, screenSide.id).toPacket());
@@ -200,7 +214,12 @@ public class InputScreen extends Screen {
 
     private void closeTab() {
         ScreenData data = getScreenData();
-        if (data == null || data.tabCount() <= 1) return;
+        if (data == null || !ScreenInput.canType(data)) return;
+        if (ScreenInput.isRemote(data)) { // Hybrid viewer: closes the owner's current tab
+            ScreenInput.tabRemote(data, screenPos, screenSide, "tclose");
+            return;
+        }
+        if (data.tabCount() <= 1) return;
         int oldIndex = data.activeTab();
         if (!data.soloMode) {
             ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
@@ -236,6 +255,7 @@ public class InputScreen extends Screen {
     }
 
     private String getCurrentUrl() {
+        if (ScreenInput.isRemote(getScreenData())) return ""; // our browser only shows the stream page
         Object browser = getBrowser();
         return browser != null ? MCEFHelper.getBrowserUrl(browser) : "";
     }
@@ -262,8 +282,7 @@ public class InputScreen extends Screen {
             return true;
         }
         if (super.keyPressed(keyCode, scanCode, modifiers)) return true;
-        Object browser = getBrowser();
-        if (browser != null) MCEFHelper.sendKeyPress(browser, keyCode, scanCode, modifiers);
+        ScreenInput.keyPress(getScreenData(), screenPos, screenSide, keyCode, scanCode, modifiers);
         return true;
     }
 
@@ -273,8 +292,7 @@ public class InputScreen extends Screen {
             super.keyReleased(keyCode, scanCode, modifiers);
             return true;
         }
-        Object browser = getBrowser();
-        if (browser != null) MCEFHelper.sendKeyRelease(browser, keyCode, scanCode, modifiers);
+        ScreenInput.keyRelease(getScreenData(), screenPos, screenSide, keyCode, scanCode, modifiers);
         return true;
     }
 
@@ -285,8 +303,7 @@ public class InputScreen extends Screen {
             return true;
         }
         if (super.charTyped(codePoint, modifiers)) return true;
-        Object browser = getBrowser();
-        if (browser != null) MCEFHelper.sendKeyEvent(browser, codePoint);
+        ScreenInput.keyChar(getScreenData(), screenPos, screenSide, codePoint);
         return true;
     }
 
@@ -314,12 +331,12 @@ public class InputScreen extends Screen {
         }
         if (super.mouseClicked(mouseX, mouseY, button)) return true;
         ScreenCursorTracker.CursorInfo cursor = ScreenCursorTracker.getCurrentCursor();
-        if (cursor != null && cursor.screenData != null && cursor.screenData.browser != null) {
+        if (cursor != null && cursor.screenData != null) {
             long now = System.currentTimeMillis();
             int clickCount = (now - cursor.screenData.lastClickTime < 500) ? 2 : 1;
             cursor.screenData.lastClickTime = now;
-            MCEFHelper.sendMouseClick(cursor.screenData.browser, cursor.pixelX, cursor.pixelY, button, false, clickCount);
-            MCEFHelper.sendMouseClick(cursor.screenData.browser, cursor.pixelX, cursor.pixelY, button, true, clickCount);
+            ScreenInput.click(cursor.screenData, cursor.pos, cursor.side, cursor.pixelX, cursor.pixelY, button, false, clickCount);
+            ScreenInput.click(cursor.screenData, cursor.pos, cursor.side, cursor.pixelX, cursor.pixelY, button, true, clickCount);
         }
         return true;
     }

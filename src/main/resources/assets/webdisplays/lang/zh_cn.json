@@ -3,6 +3,7 @@
   "block.webdisplays.screen": "网页屏幕方块",
   "block.webdisplays.kb_left": "键盘（左）",
   "block.webdisplays.kb_right": "键盘（右）",
+  "item.webdisplays.mouse": "鼠标",
   "item.webdisplays.keyboard": "键盘",
   "item.webdisplays.screencfg": "屏幕配置器",
   "item.webdisplays.linker": "连接工具",

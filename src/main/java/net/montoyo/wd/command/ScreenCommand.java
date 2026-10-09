@@ -22,6 +22,7 @@ public class ScreenCommand {
         ITEMS.put("configurator", new ItemStack(WDRegistries.CONFIGURATOR));
         ITEMS.put("linker", new ItemStack(WDRegistries.LINKER));
         ITEMS.put("keyboard", new ItemStack(WDRegistries.KEYBOARD_ITEM));
+        ITEMS.put("mouse", new ItemStack(WDRegistries.MOUSE_ITEM));
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {

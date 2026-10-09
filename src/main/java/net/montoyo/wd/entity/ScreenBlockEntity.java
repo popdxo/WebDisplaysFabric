@@ -1,6 +1,8 @@
 package net.montoyo.wd.entity;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.core.Direction;
 
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -162,21 +164,35 @@ public class ScreenBlockEntity extends BlockEntity {
 
     public boolean hasScreen(BlockSide side) { return getScreen(side) != null; }
 
+    /**
+     * Auto size: grow/shrink every auto-sized display to the largest free rectangle of screen blocks extending to
+     * the picture's right and up from its bottom-left block (the block it was created from). When that moves the
+     * rectangle's minimum corner, the display is handed to the new anchor block.
+     */
     public boolean refreshSizeFromScreenBlocks() {
-        if (level == null || level.isClientSide || screens.size() != 1) return false;
-        ScreenData screen = screens.get(0);
-        if (!screen.autoSize) return false;
+        if (level == null || level.isClientSide) return false;
+        boolean changed = false;
+        for (ScreenData screen : new ArrayList<>(screens)) {
+            if (screen.autoSize && refreshSize(screen)) changed = true;
+        }
+        return changed;
+    }
+
+    private boolean refreshSize(ScreenData screen) {
+        int[] right = pictureRight(screen);
+        int[] up = pictureUp(screen);
+        BlockPos origin = pictureOrigin(screen);
         int bestWidth = 0;
         int bestHeight = 0;
         int widestPossible = 100;
         for (int y = 0; y < 100; y++) {
-            BlockPos rowStart = screenCellPos(screen.side, 0, y);
-            if (!level.getBlockState(rowStart).is(WDRegistries.SCREEN_BLOCK)) break;
             int rowWidth = 0;
-            while (rowWidth < widestPossible
-                    && level.getBlockState(screenCellPos(screen.side, rowWidth, y)).is(WDRegistries.SCREEN_BLOCK)) {
-                BlockEntity blockEntity = level.getBlockEntity(screenCellPos(screen.side, rowWidth, y));
-                if (blockEntity instanceof ScreenBlockEntity other && other != this && other.screenCount() > 0) break;
+            while (rowWidth < widestPossible) {
+                BlockPos cell = origin.offset(right[0] * rowWidth + up[0] * y, right[1] * rowWidth + up[1] * y,
+                        right[2] * rowWidth + up[2] * y);
+                if (!level.getBlockState(cell).is(WDRegistries.SCREEN_BLOCK)) break;
+                ScreenBlockEntity covering = findCovering(level, cell, screen.side);
+                if (covering != null && covering != this) break;
                 rowWidth++;
             }
             widestPossible = Math.min(widestPossible, rowWidth);
@@ -187,16 +203,97 @@ public class ScreenBlockEntity extends BlockEntity {
             }
         }
         if (bestWidth < 1 || bestHeight < 1
-                || (bestWidth == screen.size.x && bestHeight == screen.size.y)) return false;
+                || (bestWidth == screen.imageWidthBlocks() && bestHeight == screen.imageHeightBlocks())) return false;
 
-        screen.size.set(bestWidth, bestHeight);
+        Placement placement = placement(origin, screen.side, bestWidth, bestHeight, screen.upDir);
+        ScreenBlockEntity target = placement.anchor().equals(worldPosition) ? this
+                : level.getBlockEntity(placement.anchor()) instanceof ScreenBlockEntity other ? other : null;
+        if (target == null || (target != this && target.getScreen(screen.side) != null)) return false;
+
+        screen.size.set(placement.sizeX(), placement.sizeY());
         if (screen.autoResolution) {
-            screen.resolution.set(bestWidth * 320, bestHeight * 320);
-            if (level != null && level.isClientSide) screen.resizeBrowsers(screen.resolution.x, screen.resolution.y);
+            screen.resolution.set(screen.imageWidthBlocks() * 320, screen.imageHeightBlocks() * 320);
         }
-        setChanged();
-        level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        if (target == this) {
+            updateAABB();
+            setChanged();
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        } else {
+            moveScreenTo(screen, target);
+        }
         return true;
+    }
+
+    /** Hands a display to another anchor block (server side), keeping all its state. */
+    private void moveScreenTo(ScreenData screen, ScreenBlockEntity target) {
+        BlockPos from = worldPosition;
+        BlockPos to = target.worldPosition;
+        screens.remove(screen);
+        updateAABB();
+        setChanged();
+        target.screens.add(screen);
+        target.updateAABB();
+        target.setChanged();
+        // Sent before the block updates so clients move the live browser instead of reloading the page.
+        if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+            net.montoyo.wd.network.ServerNetHandler.broadcastDisplayMoved(serverLevel, from, to, screen.side);
+        }
+        level.sendBlockUpdated(from, getBlockState(), getBlockState(), 3);
+        level.sendBlockUpdated(to, target.getBlockState(), target.getBlockState(), 3);
+    }
+
+    /** Client: take a display out of this block entity without closing its browser (it is being moved). */
+    public ScreenData detachScreen(BlockSide side) {
+        ScreenData screen = getScreen(side);
+        if (screen == null) return null;
+        screens.remove(screen);
+        updateAABB();
+        return screen;
+    }
+
+    /** Client: adopt a display (with its live browser) moved from another anchor block. */
+    public void attachScreen(ScreenData screen) {
+        if (getScreen(screen.side) != null) return;
+        screens.add(screen);
+        updateAABB();
+    }
+
+    /** World step of the picture's right edge direction. */
+    private static int[] pictureRight(ScreenData screen) {
+        return switch (screen.side) {
+            case NORTH -> new int[]{-1, 0, 0};
+            case SOUTH -> new int[]{1, 0, 0};
+            case WEST -> new int[]{0, 0, 1};
+            case EAST -> new int[]{0, 0, -1};
+            case BOTTOM, TOP -> {
+                Direction right = screen.upDir.getClockWise();
+                yield new int[]{right.getStepX(), 0, right.getStepZ()};
+            }
+        };
+    }
+
+    /** World step of the picture's top edge direction. */
+    private static int[] pictureUp(ScreenData screen) {
+        return switch (screen.side) {
+            case BOTTOM, TOP -> new int[]{screen.upDir.getStepX(), 0, screen.upDir.getStepZ()};
+            default -> new int[]{0, 1, 0};
+        };
+    }
+
+    /** The picture's bottom-left block for a display anchored here (its minimum corner is worldPosition). */
+    private BlockPos pictureOrigin(ScreenData screen) {
+        int extentX, extentY, extentZ;
+        switch (screen.side) {
+            case NORTH, SOUTH -> { extentX = screen.size.x; extentY = screen.size.y; extentZ = 1; }
+            case WEST, EAST -> { extentX = 1; extentY = screen.size.y; extentZ = screen.size.x; }
+            default -> { extentX = screen.size.x; extentY = 1; extentZ = screen.size.y; }
+        }
+        int[] right = pictureRight(screen);
+        int[] up = pictureUp(screen);
+        return worldPosition.offset(
+                right[0] < 0 || up[0] < 0 ? extentX - 1 : 0,
+                right[1] < 0 || up[1] < 0 ? extentY - 1 : 0,
+                right[2] < 0 || up[2] < 0 ? extentZ - 1 : 0);
     }
 
     private BlockPos screenCellPos(BlockSide side, int x, int y) {
@@ -207,24 +304,90 @@ public class ScreenBlockEntity extends BlockEntity {
         };
     }
 
+    /**
+     * A display fits when every cell is a screen block whose face on {@code side} is not already part of another
+     * display. Different faces of the same block can each hold their own display.
+     */
     public boolean canFitScreen(BlockSide side, int width, int height) {
         if (level == null || width < 1 || height < 1 || width > 100 || height > 100) return false;
-        if (getScreen(side) == null && !screens.isEmpty()) return false;
-
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 BlockPos cellPos = screenCellPos(side, x, y);
                 if (!level.getBlockState(cellPos).is(WDRegistries.SCREEN_BLOCK)) return false;
-                BlockEntity blockEntity = level.getBlockEntity(cellPos);
-                if (blockEntity instanceof ScreenBlockEntity other && other != this
-                        && other.screenCount() > 0) return false;
+                ScreenBlockEntity covering = findCovering(level, cellPos, side);
+                if (covering != null && covering != this) return false;
             }
         }
         return true;
     }
 
+    /** True when {@code cell}'s face on the display's side is part of display {@code data} anchored here. */
+    public boolean covers(ScreenData data, BlockPos cell) {
+        int dx = cell.getX() - worldPosition.getX();
+        int dy = cell.getY() - worldPosition.getY();
+        int dz = cell.getZ() - worldPosition.getZ();
+        return switch (data.side) {
+            case NORTH, SOUTH -> dz == 0 && dx >= 0 && dx < data.size.x && dy >= 0 && dy < data.size.y;
+            case WEST, EAST -> dx == 0 && dz >= 0 && dz < data.size.x && dy >= 0 && dy < data.size.y;
+            case BOTTOM, TOP -> dy == 0 && dx >= 0 && dx < data.size.x && dz >= 0 && dz < data.size.y;
+        };
+    }
+
+    /** The loaded display (its anchor block entity) whose {@code side} face covers {@code cell}, or null. */
+    public static ScreenBlockEntity findCovering(Level level, BlockPos cell, BlockSide side) {
+        if (level == null) return null;
+        Iterable<ScreenBlockEntity> candidates = level.isClientSide ? getClientScreens() : serverScreens;
+        for (ScreenBlockEntity entity : candidates) {
+            if (entity.level != level || entity.isRemoved()) continue;
+            ScreenData data = entity.getScreen(side);
+            if (data != null && entity.covers(data, cell)) return entity;
+        }
+        return null;
+    }
+
+    /** Where a new display goes: anchor block, stored size (world axes) and picture orientation. */
+    public record Placement(BlockPos anchor, int sizeX, int sizeY, Direction upDir) {}
+
+    /**
+     * Displays grow to the viewer's right and up from the clicked block. Walls: "up" is +Y. Floors/ceilings: "up"
+     * is the direction the player faces, "right" is the player's right. Storage always extends along positive
+     * axes from the anchor, so the anchor is the rectangle's minimum corner.
+     */
+    public static Placement placement(BlockPos clicked, BlockSide side, int width, int height, Direction facing) {
+        return switch (side) {
+            case NORTH -> new Placement(clicked.offset(-(width - 1), 0, 0), width, height, Direction.NORTH);
+            case EAST -> new Placement(clicked.offset(0, 0, -(width - 1)), width, height, Direction.NORTH);
+            case SOUTH, WEST -> new Placement(clicked, width, height, Direction.NORTH);
+            case BOTTOM, TOP -> {
+                Direction up = facing != null && facing.getAxis().isHorizontal() ? facing : Direction.NORTH;
+                Direction right = up.getClockWise();
+                int anchorX = clicked.getX() + Math.min(0, right.getStepX() * (width - 1)) + Math.min(0, up.getStepX() * (height - 1));
+                int anchorZ = clicked.getZ() + Math.min(0, right.getStepZ() * (width - 1)) + Math.min(0, up.getStepZ() * (height - 1));
+                int sizeX = Math.abs(right.getStepX()) * width + Math.abs(up.getStepX()) * height;
+                int sizeZ = Math.abs(right.getStepZ()) * width + Math.abs(up.getStepZ()) * height;
+                yield new Placement(new BlockPos(anchorX, clicked.getY(), anchorZ), sizeX, sizeZ, up);
+            }
+        };
+    }
+
+    public void setRemoteLink(BlockSide side, String linkId) {
+        ScreenData screen = getScreen(side);
+        if (screen == null) return;
+        screen.remoteLinkId = linkId;
+        setChanged();
+        if (level != null && !level.isClientSide) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+    }
+
+    public void setViewOnly(BlockSide side, boolean viewOnly) {
+        ScreenData screen = getScreen(side);
+        if (screen == null) return;
+        screen.viewOnly = viewOnly;
+        setChanged();
+        if (level != null && !level.isClientSide) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+    }
+
     public boolean addScreen(BlockSide side, Vector2i resolution, Vector2i size, String owner) {
-        if (!screens.isEmpty() || !canFitScreen(side, size.x, size.y)) return false;
+        if (getScreen(side) != null || !canFitScreen(side, size.x, size.y)) return false;
         screens.add(new ScreenData(side, resolution, size, owner));
         updateAABB();
         setChanged();
@@ -286,7 +449,7 @@ public class ScreenBlockEntity extends BlockEntity {
         if (screen == null || !canFitScreen(side, width, height)) return false;
         screen.size.set(width, height);
         if (screen.autoResolution) {
-            screen.resolution.set(width * 320, height * 320);
+            screen.resolution.set(screen.imageWidthBlocks() * 320, screen.imageHeightBlocks() * 320);
             if (level != null && level.isClientSide) screen.resizeBrowsers(screen.resolution.x, screen.resolution.y);
         }
         setChanged();
@@ -312,7 +475,7 @@ public class ScreenBlockEntity extends BlockEntity {
         if (screen == null) return;
         screen.autoResolution = enabled;
         if (enabled) {
-            screen.resolution.set(screen.size.x * 320, screen.size.y * 320);
+            screen.resolution.set(screen.imageWidthBlocks() * 320, screen.imageHeightBlocks() * 320);
             if (level != null && level.isClientSide) screen.resizeBrowsers(screen.resolution.x, screen.resolution.y);
         }
         setChanged();
@@ -384,13 +547,10 @@ public class ScreenBlockEntity extends BlockEntity {
                 u = 1.0 - localZ / w;
                 v = 1.0 - localY / h;
             }
-            case BOTTOM -> {
-                u = localX / w;
-                v = 1.0 - localZ / h;
-            }
-            case TOP -> {
-                u = localX / w;
-                v = 1.0 - localZ / h;
+            case BOTTOM, TOP -> {
+                double[] flat = flatUV(screen.upDir, localX / w, localZ / h);
+                u = flat[0];
+                v = flat[1];
             }
             default -> {
                 u = 0; v = 0;
@@ -403,6 +563,19 @@ public class ScreenBlockEntity extends BlockEntity {
         }
         out.x = Math.max(0, Math.min((int) (u * screen.resolution.x), screen.resolution.x - 1));
         out.y = Math.max(0, Math.min((int) (v * screen.resolution.y), screen.resolution.y - 1));
+    }
+
+    /**
+     * Picture coordinates (0..1, v down) at a point of a floor/ceiling display, given as fractions of its x and z
+     * extent. The top of the picture points to {@code upDir}; its right edge to the clockwise neighbour.
+     */
+    public static double[] flatUV(Direction upDir, double fx, double fz) {
+        return switch (upDir) {
+            case SOUTH -> new double[]{1.0 - fx, 1.0 - fz};
+            case EAST -> new double[]{fz, 1.0 - fx};
+            case WEST -> new double[]{1.0 - fz, fx};
+            default -> new double[]{fx, fz};
+        };
     }
 
     public void clickAt(Player player, BlockSide side, BlockHitResult hit) {
@@ -595,13 +768,13 @@ public class ScreenBlockEntity extends BlockEntity {
         double minX = worldPosition.getX(), minY = worldPosition.getY(), minZ = worldPosition.getZ();
         double maxX = minX + 1, maxY = minY + 1, maxZ = minZ + 1;
         for (ScreenData screen : screens) {
-            double endX = worldPosition.getX() + (screen.side.right.x * screen.size.x) + (screen.side.up.x * screen.size.y);
-            double endY = worldPosition.getY() + (screen.side.right.y * screen.size.x) + (screen.side.up.y * screen.size.y);
-            double endZ = worldPosition.getZ() + (screen.side.right.z * screen.size.x) + (screen.side.up.z * screen.size.y);
-            minX = Math.min(minX, endX); minY = Math.min(minY, endY); minZ = Math.min(minZ, endZ);
-            maxX = Math.max(maxX, endX); maxY = Math.max(maxY, endY); maxZ = Math.max(maxZ, endZ);
+            switch (screen.side) {
+                case NORTH, SOUTH -> { maxX = Math.max(maxX, minX + screen.size.x); maxY = Math.max(maxY, minY + screen.size.y); }
+                case WEST, EAST -> { maxZ = Math.max(maxZ, minZ + screen.size.x); maxY = Math.max(maxY, minY + screen.size.y); }
+                case BOTTOM, TOP -> { maxX = Math.max(maxX, minX + screen.size.x); maxZ = Math.max(maxZ, minZ + screen.size.y); }
+            }
         }
-        renderBB = new AABB(minX, minY, minZ, maxX + 1, maxY + 1, maxZ + 1);
+        renderBB = new AABB(minX - 0.01, minY - 0.01, minZ - 0.01, maxX + 0.01, maxY + 0.01, maxZ + 0.01);
     }
 
     // === NBT Serialization ===
@@ -624,6 +797,9 @@ public class ScreenBlockEntity extends BlockEntity {
             screenTag.putBoolean("autoResolution", screen.autoResolution);
             screenTag.putBoolean("hybridMode", screen.hybridMode);
             screenTag.putBoolean("soloMode", screen.soloMode);
+            screenTag.putBoolean("viewOnly", screen.viewOnly);
+            if (screen.remoteLinkId != null) screenTag.putString("remoteLink", screen.remoteLinkId);
+            screenTag.putInt("upDir", screen.upDir.get2DDataValue());
             if (screen.owner != null) screenTag.putString("owner", screen.owner);
             if (screen.ownerUuid != null) screenTag.putString("ownerUuid", screen.ownerUuid);
             if (screen.url != null) screenTag.putString("url", screen.url);
@@ -665,6 +841,9 @@ public class ScreenBlockEntity extends BlockEntity {
                 boolean autoResolution = !screenTag.contains("autoResolution") || screenTag.getBoolean("autoResolution");
                 boolean hybridMode = screenTag.getBoolean("hybridMode");
                 boolean soloMode = screenTag.getBoolean("soloMode");
+                boolean viewOnly = screenTag.getBoolean("viewOnly");
+                String remoteLink = screenTag.contains("remoteLink") ? screenTag.getString("remoteLink") : null;
+                Direction upDir = screenTag.contains("upDir") ? Direction.from2DDataValue(screenTag.getInt("upDir")) : Direction.NORTH;
                 String owner = screenTag.contains("owner") ? screenTag.getString("owner") : null;
                 String ownerUuid = screenTag.contains("ownerUuid") ? screenTag.getString("ownerUuid") : null;
                 String url = screenTag.contains("url") ? screenTag.getString("url") : null;
@@ -717,6 +896,9 @@ public class ScreenBlockEntity extends BlockEntity {
                 boolean wasHybrid = screen.hybridMode;
                 screen.hybridMode = hybridMode;
                 screen.soloMode = soloMode;
+                screen.viewOnly = viewOnly;
+                screen.remoteLinkId = remoteLink;
+                screen.upDir = upDir;
                 boolean clientSide = level != null && level.isClientSide;
                 if (clientSide && wasHybrid && !hybridMode) screen.clearHybridSession();
                 // Solo and Hybrid displays keep their own local tabs (Hybrid: the owner's browser is the source, the
@@ -739,6 +921,14 @@ public class ScreenBlockEntity extends BlockEntity {
                 if (screen.tabUrls.isEmpty() && !keepLocalTabs) screen.tabUrls.addAll(tabUrls);
 
                 screens.add(screen);
+            }
+        }
+        if (level != null && level.isClientSide) {
+            for (ScreenData previous : previousScreens) {
+                if (!screens.contains(previous)) {
+                    previous.clearHybridSession();
+                    previous.unload();
+                }
             }
         }
         if (tag.contains("ytVolume")) {

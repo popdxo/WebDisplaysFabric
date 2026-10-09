@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "S",
+    "B",
+    "I"
+  ],
+  "key": {
+    "S": { "item": "minecraft:string" },
+    "B": { "item": "minecraft:stone_button" },
+    "I": { "item": "minecraft:iron_ingot" }
+  },
+  "result": {
+    "item": "webdisplays:mouse",
+    "count": 1
+  }
+}

@@ -65,7 +65,7 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
         float h = screen.size.y;
 
         // "Cover" mode: zoom the browser content to fill the entire screen surface
-        float screenAspect = w / h;
+        float screenAspect = screen.imageWidthBlocks() / (float) screen.imageHeightBlocks();
         float browserAspect = (float) screen.resolution.x / (float) screen.resolution.y;
 
         float uvU0 = 0f, uvV0 = 0f, uvU1 = 1f, uvV1 = 1f;
@@ -138,18 +138,24 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
                 builder.vertex(matrix, 0, h, 0).uv(u1, v0).color(255, 255, 255, 255).endVertex();
                 builder.vertex(matrix, 0, h, w).uv(u0, v0).color(255, 255, 255, 255).endVertex();
             }
-            case BOTTOM -> {
-                builder.vertex(matrix, 0, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
-                builder.vertex(matrix, w, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
-                builder.vertex(matrix, w, 0, h).uv(u1, v0).color(255, 255, 255, 255).endVertex();
-                builder.vertex(matrix, 0, 0, h).uv(u0, v0).color(255, 255, 255, 255).endVertex();
-            }
-            case TOP -> {
-                // Same UV per position as BOTTOM, but wound the other way so the face is front-facing from above.
-                builder.vertex(matrix, 0, 0, 0).uv(u0, v1).color(255, 255, 255, 255).endVertex();
-                builder.vertex(matrix, 0, 0, h).uv(u0, v0).color(255, 255, 255, 255).endVertex();
-                builder.vertex(matrix, w, 0, h).uv(u1, v0).color(255, 255, 255, 255).endVertex();
-                builder.vertex(matrix, w, 0, 0).uv(u1, v1).color(255, 255, 255, 255).endVertex();
+            case BOTTOM, TOP -> {
+                // Floors/ceilings: the picture's top follows screen.upDir (same mapping as click handling).
+                float[] c00 = flatCornerUV(screen, 0, 0, uvU0, uvV0, uvU1, uvV1);
+                float[] c10 = flatCornerUV(screen, 1, 0, uvU0, uvV0, uvU1, uvV1);
+                float[] c11 = flatCornerUV(screen, 1, 1, uvU0, uvV0, uvU1, uvV1);
+                float[] c01 = flatCornerUV(screen, 0, 1, uvU0, uvV0, uvU1, uvV1);
+                if (side == BlockSide.BOTTOM) {
+                    builder.vertex(matrix, 0, 0, 0).uv(c00[0], c00[1]).color(255, 255, 255, 255).endVertex();
+                    builder.vertex(matrix, w, 0, 0).uv(c10[0], c10[1]).color(255, 255, 255, 255).endVertex();
+                    builder.vertex(matrix, w, 0, h).uv(c11[0], c11[1]).color(255, 255, 255, 255).endVertex();
+                    builder.vertex(matrix, 0, 0, h).uv(c01[0], c01[1]).color(255, 255, 255, 255).endVertex();
+                } else {
+                    // Wound the other way so the face is front-facing from above.
+                    builder.vertex(matrix, 0, 0, 0).uv(c00[0], c00[1]).color(255, 255, 255, 255).endVertex();
+                    builder.vertex(matrix, 0, 0, h).uv(c01[0], c01[1]).color(255, 255, 255, 255).endVertex();
+                    builder.vertex(matrix, w, 0, h).uv(c11[0], c11[1]).color(255, 255, 255, 255).endVertex();
+                    builder.vertex(matrix, w, 0, 0).uv(c10[0], c10[1]).color(255, 255, 255, 255).endVertex();
+                }
             }
         }
 
@@ -170,22 +176,26 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
                 case EAST -> lx -= 1.0f;
                 case TOP -> ly -= 1.0f;
             }
-            drawArrowCursor(matrix, side, lx, ly, lz);
+            drawArrowCursor(matrix, screen, lx, ly, lz, 0xFFFFFF);
         }
 
-        // Hybrid viewers: draw the owner's cursor (synced through the server) on the stream.
-        if (screen.hybridMode && screen.remoteCursorVisible
-                && System.currentTimeMillis() - screen.remoteCursorAt < 1500
-                && !MCEFHelper.isLocalPlayerOwner(screen.owner, screen.ownerUuid)) {
-            float lx = screen.remoteCursorX;
-            float ly = screen.remoteCursorY;
-            float lz = screen.remoteCursorZ;
+        // Everyone else's cursors on this display (synced through the server), each in its own tint.
+        long now = System.currentTimeMillis();
+        for (java.util.Map.Entry<java.util.UUID, ScreenData.RemoteCursor> entry : screen.remoteCursors.entrySet()) {
+            ScreenData.RemoteCursor remote = entry.getValue();
+            if (now - remote.receivedAt() > 1500) {
+                screen.remoteCursors.remove(entry.getKey(), remote);
+                continue;
+            }
+            float lx = remote.x();
+            float ly = remote.y();
+            float lz = remote.z();
             switch (side) {
                 case SOUTH -> lz -= 1.0f;
                 case EAST -> lx -= 1.0f;
                 case TOP -> ly -= 1.0f;
             }
-            drawArrowCursor(matrix, side, lx, ly, lz);
+            drawArrowCursor(matrix, screen, lx, ly, lz, cursorTint(entry.getKey()));
         }
 
         poseStack.popPose();
@@ -203,20 +213,49 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
     private static final float[][] OUTLINE_OFFSETS = {
             {-1.3f, 0}, {1.3f, 0}, {0, -1.3f}, {0, 1.3f}, {-1f, -1f}, {1f, -1f}, {-1f, 1f}, {1f, 1f}};
 
-    /** Surface axes (screen-right, screen-up) matching how the texture is laid out for each side. */
-    private static float[][] surfaceAxes(BlockSide side) {
-        return switch (side) {
+    /** Surface axes (picture-right, picture-up) matching how the texture is laid out for each side. */
+    private static float[][] surfaceAxes(ScreenData screen) {
+        return switch (screen.side) {
             case NORTH -> new float[][]{{-1, 0, 0}, {0, 1, 0}};
             case SOUTH -> new float[][]{{1, 0, 0}, {0, 1, 0}};
             case WEST -> new float[][]{{0, 0, 1}, {0, 1, 0}};
             case EAST -> new float[][]{{0, 0, -1}, {0, 1, 0}};
-            default -> new float[][]{{1, 0, 0}, {0, 0, 1}}; // TOP / BOTTOM
+            default -> {
+                net.minecraft.core.Direction up = screen.upDir, right = up.getClockWise();
+                yield new float[][]{{right.getStepX(), 0, right.getStepZ()}, {up.getStepX(), 0, up.getStepZ()}};
+            }
         };
     }
 
-    private static void drawArrowCursor(Matrix4f matrix, BlockSide side, float lx, float ly, float lz) {
-        float[][] axes = surfaceAxes(side);
+    /** UV for a floor/ceiling corner (fx, fz in {0,1}), including rotation and the cover-mode crop. */
+    private static float[] flatCornerUV(ScreenData screen, int fx, int fz, float cropU0, float cropV0, float cropU1, float cropV1) {
+        double[] uv = ScreenBlockEntity.flatUV(screen.upDir, fx, fz);
+        double u = uv[0], v = uv[1];
+        switch (screen.rotation) {
+            case ROT_90 -> { double t = u; u = v; v = 1.0 - t; }
+            case ROT_180 -> { u = 1.0 - u; v = 1.0 - v; }
+            case ROT_270 -> { double t = u; u = 1.0 - v; v = t; }
+            default -> { }
+        }
+        return new float[]{(float) (cropU0 + u * (cropU1 - cropU0)), (float) (cropV0 + v * (cropV1 - cropV0))};
+    }
+
+    /** A stable pastel colour per player so overlapping cursors can be told apart. */
+    private static int cursorTint(java.util.UUID player) {
+        float hue = (player.hashCode() & 0xFFFF) / 65536.0f;
+        return java.awt.Color.HSBtoRGB(hue, 0.45f, 1.0f) & 0xFFFFFF;
+    }
+
+    private static void drawArrowCursor(Matrix4f matrix, ScreenData screen, float lx, float ly, float lz, int fillRgb) {
+        float[][] axes = surfaceAxes(screen);
         float[] r = axes[0], u = axes[1];
+        // Lift the pointer just off the screen surface and depth-test it so blocks in front hide it.
+        lx += (float) screen.side.normal.x * 0.005f;
+        ly += (float) screen.side.normal.y * 0.005f;
+        lz += (float) screen.side.normal.z * 0.005f;
+        RenderSystem.enableDepthTest();
+        // The outline and fill layers share one plane; without this they depth-fight and flicker black/white.
+        RenderSystem.depthMask(false);
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
         RenderSystem.setShaderTexture(0, 0);
         RenderSystem.disableCull();
@@ -225,9 +264,11 @@ public class ScreenRenderer implements BlockEntityRenderer<ScreenBlockEntity> {
         for (float[] offset : OUTLINE_OFFSETS) {
             addArrow(cb, matrix, lx, ly, lz, r, u, offset[0], offset[1], 0, 0, 0);
         }
-        addArrow(cb, matrix, lx, ly, lz, r, u, 0, 0, 255, 255, 255);
+        addArrow(cb, matrix, lx, ly, lz, r, u, 0, 0, (fillRgb >> 16) & 255, (fillRgb >> 8) & 255, fillRgb & 255);
         BufferUploader.drawWithShader(cb.end());
+        RenderSystem.depthMask(true);
         RenderSystem.enableCull();
+        RenderSystem.disableDepthTest();
     }
 
     private static void addArrow(BufferBuilder cb, Matrix4f matrix, float lx, float ly, float lz,

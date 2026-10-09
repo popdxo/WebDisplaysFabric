@@ -43,6 +43,8 @@ public class WDRegistries {
     // === ITEMS ===
     public static final Item CONFIGURATOR = registerItem("screencfg", net.montoyo.wd.item.ItemScreenConfigurator::new);
     public static final Item LINKER = registerItem("linker", net.montoyo.wd.item.ItemLinker::new);
+    /** Hold to point at and click on displays. */
+    public static final Item MOUSE_ITEM = registerItem("mouse", net.montoyo.wd.item.MouseItem::new);
 
     // === BLOCK ENTITIES ===
     public static BlockEntityType<ScreenBlockEntity> SCREEN_BLOCK_ENTITY;
@@ -102,6 +104,7 @@ public class WDRegistries {
                         .displayItems((params, output) -> {
                             output.accept(SCREEN_ITEM);
                             output.accept(KEYBOARD_ITEM);
+                            output.accept(MOUSE_ITEM);
                             output.accept(CONFIGURATOR);
                             output.accept(LINKER);
                         })

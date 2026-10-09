@@ -52,9 +52,21 @@ public class ServerNetHandler {
                 if (actionScreen != null && actionScreen.hybridMode && !displayOwner
                         && !ScreenActionPayload.ACTION_MEDIA_STATE.equals(payload.action())
                         && !ScreenActionPayload.ACTION_CLAIM_OWNER.equals(payload.action())
-                        && !ScreenActionPayload.ACTION_REQUEST_HYBRID_VIEW.equals(payload.action())) {
+                        && !ScreenActionPayload.ACTION_REQUEST_HYBRID_VIEW.equals(payload.action())
+                        && !ScreenActionPayload.ACTION_REMOTE_INPUT.equals(payload.action())
+                        && !ScreenActionPayload.ACTION_CURSOR.equals(payload.action())) {
                     player.displayClientMessage(net.minecraft.network.chat.Component.literal(
-                            "Only the display owner can control this Hybrid display."), true);
+                            "Only the display owner can change this Hybrid display."), true);
+                    return;
+                }
+                // View-only displays: other players may watch but not interact (Solo is always free).
+                if (actionScreen != null && actionScreen.viewOnly && !displayOwner && !actionScreen.soloMode
+                        && (ScreenActionPayload.ACTION_SET_URL.equals(payload.action())
+                        || ScreenActionPayload.ACTION_SYNC_TAB_URL.equals(payload.action())
+                        || ScreenActionPayload.ACTION_ADD_TAB.equals(payload.action())
+                        || ScreenActionPayload.ACTION_SELECT_TAB.equals(payload.action())
+                        || ScreenActionPayload.ACTION_CLOSE_TAB.equals(payload.action())
+                        || ScreenActionPayload.ACTION_MEDIA_STATE.equals(payload.action()))) {
                     return;
                 }
                 if (actionScreen != null && (actionScreen.soloMode || actionScreen.hybridMode) && (ScreenActionPayload.ACTION_SET_URL.equals(payload.action())
@@ -69,27 +81,35 @@ public class ServerNetHandler {
 
                 switch (payload.action()) {
                     case ScreenActionPayload.ACTION_ADD_SCREEN -> {
-                        if (!screen.hasScreen(side) && screen.screenCount() == 0) {
-                            int bw = 2, bh = 2;
-                            String[] parts = payload.extraData().split(",");
-                            if (parts.length == 2) {
-                                try {
-                                    bw = Math.max(1, Math.min(100, Integer.parseInt(parts[0])));
-                                    bh = Math.max(1, Math.min(100, Integer.parseInt(parts[1])));
-                                } catch (NumberFormatException e) {}
+                        // extraData: "width,height[,facing]" in picture blocks; the display grows to the creator's
+                        // right and up from the clicked block, so its anchor may be another screen block.
+                        int bw = 2, bh = 2;
+                        net.minecraft.core.Direction facing = player.getDirection();
+                        String[] parts = payload.extraData().split(",");
+                        if (parts.length >= 2) {
+                            try {
+                                bw = Math.max(1, Math.min(100, Integer.parseInt(parts[0])));
+                                bh = Math.max(1, Math.min(100, Integer.parseInt(parts[1])));
+                                if (parts.length >= 3) facing = net.minecraft.core.Direction.from2DDataValue(Integer.parseInt(parts[2]));
+                            } catch (NumberFormatException e) {}
+                        }
+                        ScreenBlockEntity.Placement placement = ScreenBlockEntity.placement(payload.pos(), side, bw, bh, facing);
+                        ScreenBlockEntity anchor = level.isLoaded(placement.anchor())
+                                && level.getBlockEntity(placement.anchor()) instanceof ScreenBlockEntity found ? found : null;
+                        Vector2i size = new Vector2i(placement.sizeX(), placement.sizeY());
+                        Vector2i res = new Vector2i(bw * 320, bh * 320);
+                        if (anchor != null && anchor.addScreen(side, res, size, owner)) {
+                            ScreenData created = anchor.getScreen(side);
+                            if (created != null) {
+                                created.ownerUuid = player.getUUID().toString();
+                                created.upDir = placement.upDir();
                             }
-                            Vector2i size = new Vector2i(bw, bh);
-                            Vector2i res = new Vector2i(bw * 320, bh * 320);
-                            if (screen.addScreen(side, res, size, owner)) {
-                                ScreenData created = screen.getScreen(side);
-                                if (created != null) created.ownerUuid = player.getUUID().toString();
-                                screen.setChanged();
-                                level.sendBlockUpdated(payload.pos(), level.getBlockState(payload.pos()),
-                                        level.getBlockState(payload.pos()), 3);
-                            } else {
-                                player.displayClientMessage(net.minecraft.network.chat.Component.literal(
-                                        "Screen must fit on free screen blocks and cannot overlap another display."), true);
-                            }
+                            anchor.setChanged();
+                            level.sendBlockUpdated(placement.anchor(), level.getBlockState(placement.anchor()),
+                                    level.getBlockState(placement.anchor()), 3);
+                        } else {
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "Screen must fit on free screen blocks and cannot overlap another display."), true);
                         }
                     }
                     case ScreenActionPayload.ACTION_REMOVE_SCREEN -> {
@@ -238,9 +258,52 @@ public class ServerNetHandler {
                         if (!isOwner || !data.hybridMode) return;
                         startHybridSession(server, player, payload.pos(), side, data);
                     }
+                    case ScreenActionPayload.ACTION_UNLINK_REMOTE -> {
+                        if (actionScreen == null || !displayOwner) return;
+                        screen.setRemoteLink(side, null);
+                        player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                "Remote unlinked from this display."), true);
+                    }
+                    case ScreenActionPayload.ACTION_SET_VIEW_ONLY -> {
+                        if (actionScreen == null) return;
+                        if (!displayOwner) {
+                            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                    "Only the display owner can change who may control it."), true);
+                            return;
+                        }
+                        boolean viewOnly = Boolean.parseBoolean(payload.extraData());
+                        screen.setViewOnly(side, viewOnly);
+                        player.displayClientMessage(net.minecraft.network.chat.Component.literal(viewOnly
+                                ? "Other players can now only view this display." : "Other players can now control this display."), true);
+                    }
+                    case ScreenActionPayload.ACTION_REMOTE_INPUT -> {
+                        // Hybrid: a viewer's input goes to the owner's browser (the only real browser for this display).
+                        // Pointer events need the linked remote in hand; keyboard, navigation and tab events only
+                        // need it somewhere in the player's inventory.
+                        String event = payload.extraData();
+                        boolean keyboardEvent = event.startsWith("kp|") || event.startsWith("kr|")
+                                || event.startsWith("ch|") || event.startsWith("nav|")
+                                || event.equals("tadd") || event.equals("tclose");
+                        boolean allowed = actionScreen != null && (keyboardEvent
+                                ? net.montoyo.wd.item.MouseItem.hasRemote(player, actionScreen)
+                                : net.montoyo.wd.item.MouseItem.holdsRemote(player, actionScreen));
+                        if (actionScreen == null || !actionScreen.hybridMode || displayOwner || !allowed
+                                || event.length() > 2100 || !RemoteInputLimiter.allow(player.getUUID())) return;
+                        ServerPlayer ownerPlayer = actionScreen.ownerUuid != null
+                                ? server.getPlayerList().getPlayer(java.util.UUID.fromString(actionScreen.ownerUuid))
+                                : server.getPlayerList().getPlayerByName(actionScreen.owner);
+                        if (ownerPlayer == null) return;
+                        FriendlyByteBuf inputBuf = PacketByteBufs.create();
+                        inputBuf.writeBlockPos(payload.pos());
+                        inputBuf.writeVarInt(side.id);
+                        inputBuf.writeUtf(payload.extraData(), 2100);
+                        ServerPlayNetworking.send(ownerPlayer, ScreenActionPayload.REMOTE_INPUT, inputBuf);
+                    }
                     case ScreenActionPayload.ACTION_CURSOR -> {
                         ScreenData data = screen.getScreen(side);
-                        if (data == null || !data.hybridMode || !displayOwner
+                        // Everyone who may control the display shares their cursor (not on Solo: pages differ there).
+                        if (data == null || data.soloMode || (data.viewOnly && !displayOwner && !data.hybridMode)
+                                || (data.hybridMode && !net.montoyo.wd.item.MouseItem.holdsRemote(player, data))
                                 || !(level instanceof net.minecraft.server.level.ServerLevel serverLevel)) return;
                         boolean visible = !"off".equals(payload.extraData());
                         float cx = 0, cy = 0, cz = 0;
@@ -262,6 +325,7 @@ public class ServerNetHandler {
                             FriendlyByteBuf cursorBuf = PacketByteBufs.create();
                             cursorBuf.writeBlockPos(payload.pos());
                             cursorBuf.writeVarInt(side.id);
+                            cursorBuf.writeUUID(player.getUUID());
                             cursorBuf.writeBoolean(visible);
                             cursorBuf.writeFloat(cx);
                             cursorBuf.writeFloat(cy);
@@ -365,6 +429,18 @@ public class ServerNetHandler {
         for (ServerPlayer online : server.getPlayerList().getPlayers()) {
             if (online.getUUID().equals(owner.getUUID())) continue;
             sendViewerSession(online, pos, side, session.id(), session.viewerToken());
+        }
+    }
+
+    /** Lets clients move the live browser of a display whose anchor block changed (no page reload). */
+    public static void broadcastDisplayMoved(net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos from,
+                                             net.minecraft.core.BlockPos to, BlockSide side) {
+        for (ServerPlayer watcher : net.fabricmc.fabric.api.networking.v1.PlayerLookup.tracking(level, from)) {
+            FriendlyByteBuf buf = PacketByteBufs.create();
+            buf.writeBlockPos(from);
+            buf.writeBlockPos(to);
+            buf.writeVarInt(side.id);
+            ServerPlayNetworking.send(watcher, ScreenActionPayload.DISPLAY_MOVED, buf);
         }
     }
 

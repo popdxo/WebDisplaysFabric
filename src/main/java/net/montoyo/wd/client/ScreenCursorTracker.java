@@ -22,6 +22,14 @@ public class ScreenCursorTracker {
     }
 
     private static CursorInfo currentCursor = null;
+    /** The display the player is looking at, even without the mouse item (used by the keyboard item). */
+    private static CursorInfo aimedCursor = null;
+    /** Distance to the nearest display surface on the view ray (any display, any permission); +inf if none. */
+    private static double rawAimDistance = Double.POSITIVE_INFINITY;
+    /** Screen-centre ray from the last rendered frame (includes view bobbing), see {@link #setRenderRay}. */
+    private static Vec3 renderRayOrigin, renderRayDir;
+    private static long renderRayAt;
+    private static boolean rightButtonPressed = false;
     private static long lastMoveTime = 0;
     private static boolean wasAttackDown = false;
     private static boolean cursorVisible = true;
@@ -32,12 +40,41 @@ public class ScreenCursorTracker {
         return cursorVisible;
     }
 
-    public static void toggleCursorVisible() {
-        cursorVisible = !cursorVisible;
-    }
-
     public static CursorInfo getCurrentCursor() {
         return currentCursor;
+    }
+
+    public static CursorInfo getAimedCursor() {
+        return aimedCursor;
+    }
+
+    /**
+     * The world ray through the centre of the screen (the crosshair) for the frame being rendered. Using it keeps
+     * the cursor exactly under the crosshair while walking, when view bobbing tilts the view.
+     */
+    public static void setRenderRay(Vec3 origin, Vec3 direction) {
+        renderRayOrigin = origin;
+        renderRayDir = direction;
+        renderRayAt = System.nanoTime();
+    }
+
+    /**
+     * True when the block the player would hit sits behind (or is part of) a display surface. Breaking blocks
+     * through a display is never allowed, with or without the mouse item.
+     */
+    public static boolean displayBlocksAttack(Minecraft mc) {
+        if (mc.player == null || rawAimDistance == Double.POSITIVE_INFINITY) return false;
+        net.minecraft.world.phys.HitResult hit = mc.hitResult;
+        if (hit == null || hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) return false;
+        Vec3 from = mc.gameRenderer.getMainCamera().isInitialized()
+                ? mc.gameRenderer.getMainCamera().getPosition() : mc.player.getEyePosition(1.0f);
+        return rawAimDistance <= hit.getLocation().distanceTo(from) + 0.1;
+    }
+
+    /** Pointing at and clicking on displays requires holding the mouse item (either hand). */
+    public static boolean isHoldingMouse(Minecraft mc) {
+        return mc.player != null && (mc.player.getMainHandItem().is(net.montoyo.wd.registry.WDRegistries.MOUSE_ITEM)
+                || mc.player.getOffhandItem().is(net.montoyo.wd.registry.WDRegistries.MOUSE_ITEM));
     }
 
     public static boolean isScreenFocused() {
@@ -59,7 +96,8 @@ public class ScreenCursorTracker {
 
     private static void syncOwnerCursor(Minecraft mc) {
         CursorInfo c = currentCursor;
-        boolean active = c != null && c.screenData != null && c.screenData.hybridMode && isOwner(mc, c.screenData);
+        // Share our cursor with everyone else looking at the display (pointless on Solo: their pages differ).
+        boolean active = c != null && c.screenData != null && !c.screenData.soloMode;
         long now = System.currentTimeMillis();
         net.minecraft.resources.ResourceLocation channel = new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action");
         if (active) {
@@ -99,6 +137,8 @@ public class ScreenCursorTracker {
                 sendMouseLeave(mc);
             }
             currentCursor = null;
+            aimedCursor = null;
+            rawAimDistance = Double.POSITIVE_INFINITY;
             return;
         }
 
@@ -107,8 +147,21 @@ public class ScreenCursorTracker {
         lastYaw = yaw;
         lastPitch = pitch;
 
-        Vec3 origin = mc.player.getEyePosition(1.0f);
-        Vec3 look = mc.player.getViewVector(1.0f);
+        // Cast from the render camera (third person, eye height changes while sneaking, etc.), not the player model.
+        net.minecraft.client.Camera camera = mc.gameRenderer.getMainCamera();
+        Vec3 origin;
+        Vec3 look;
+        if (renderRayDir != null && System.nanoTime() - renderRayAt < 100_000_000L) {
+            origin = renderRayOrigin; // exact crosshair ray of the current frame (follows view bobbing)
+            look = renderRayDir;
+        } else if (camera.isInitialized()) {
+            origin = camera.getPosition();
+            org.joml.Vector3f forward = camera.getLookVector();
+            look = new Vec3(forward.x(), forward.y(), forward.z());
+        } else {
+            origin = mc.player.getEyePosition(1.0f);
+            look = mc.player.getViewVector(1.0f);
+        }
 
         CursorInfo best = null;
         double bestDist = Double.MAX_VALUE;
@@ -119,10 +172,6 @@ public class ScreenCursorTracker {
             for (int i = 0; i < screen.screenCount(); i++) {
                 ScreenData data = screen.getScreen(i);
                 if (data == null) continue;
-                boolean owner = data.ownerUuid != null
-                        ? mc.player.getUUID().toString().equals(data.ownerUuid)
-                        : mc.player.getGameProfile().getName().equals(data.owner);
-                if (data.hybridMode && !owner) continue;
 
                 BlockPos bp = screen.getBlockPos();
                 double bx = bp.getX(), by = bp.getY(), bz = bp.getZ();
@@ -185,7 +234,12 @@ public class ScreenCursorTracker {
             }
         }
 
-        if (best != null && best.screenData.hybridMode && !isOwner(mc, best.screenData)) best = null;
+        // `aimed`/`rawAimDistance` cover every display (the keyboard and the anti-break check need them);
+        // the interactive cursor only exists for displays we may control, and only with the mouse item.
+        aimedCursor = best;
+        rawAimDistance = best == null ? Double.POSITIVE_INFINITY : bestDist;
+        if (best != null && !ScreenInput.canControl(best.screenData)) best = null;
+        if (!isHoldingMouse(mc)) best = null;
 
         if (best != null) {
             long now = System.currentTimeMillis();
@@ -193,7 +247,7 @@ public class ScreenCursorTracker {
                 currentCursor.screenData != best.screenData ||
                 currentCursor.pixelX != best.pixelX || currentCursor.pixelY != best.pixelY)) {
                 if (now - lastMoveTime > 16) {
-                    MCEFHelper.sendMouseMove(best.screenData.browser, best.pixelX, best.pixelY, false);
+                    ScreenInput.mouseMove(best.screenData, best.pos, best.side, best.pixelX, best.pixelY, false);
                     lastMoveTime = now;
                 }
             }
@@ -203,6 +257,7 @@ public class ScreenCursorTracker {
                 if (leftButtonPressed) {
                     releaseLeftButton();
                 }
+                if (rightButtonPressed) releaseRightButton();
                 sendMouseLeave(mc);
                 currentCursor = null;
             }
@@ -212,7 +267,7 @@ public class ScreenCursorTracker {
     public static void handleLeftClick(Minecraft mc) {
         if (mc.level == null || mc.player == null) return;
         if (currentCursor != null && currentCursor.screenData != null
-                && currentCursor.screenData.hybridMode && !isOwner(mc, currentCursor.screenData)) {
+                && !ScreenInput.canControl(currentCursor.screenData)) {
             if (leftButtonPressed) releaseLeftButton();
             return;
         }
@@ -227,7 +282,7 @@ public class ScreenCursorTracker {
             long now = System.currentTimeMillis();
             int clickCount = (now - currentCursor.screenData.lastClickTime < 500) ? 2 : 1;
             currentCursor.screenData.lastClickTime = now;
-            MCEFHelper.sendMouseClick(currentCursor.screenData.browser, currentCursor.pixelX, currentCursor.pixelY, 0, false, clickCount);
+            ScreenInput.click(currentCursor.screenData, currentCursor.pos, currentCursor.side, currentCursor.pixelX, currentCursor.pixelY, 0, false, clickCount);
         } else if (!isDown && leftButtonPressed) {
             // Mouse button just released
             releaseLeftButton();
@@ -236,9 +291,36 @@ public class ScreenCursorTracker {
         wasAttackDown = isDown || mc.player.isSpectator();
     }
 
+    /** Right mouse button (the "use" key) while holding the mouse item and pointing at a display. */
+    public static void handleRightClick(Minecraft mc) {
+        if (mc.level == null || mc.player == null) return;
+        CursorInfo cursor = currentCursor;
+        boolean isDown = mc.options.keyUse.isDown();
+        // A keyboard in the main hand keeps right-click for opening keyboard input, as before.
+        boolean keyboardInMainHand = mc.player.getMainHandItem().is(net.montoyo.wd.registry.WDRegistries.KEYBOARD_ITEM);
+        if (cursor == null || cursor.screenData == null || keyboardInMainHand) {
+            if (rightButtonPressed) releaseRightButton();
+            return;
+        }
+        if (isDown && !rightButtonPressed) {
+            rightButtonPressed = true;
+            ScreenInput.click(cursor.screenData, cursor.pos, cursor.side, cursor.pixelX, cursor.pixelY, 1, false, 1);
+        } else if (!isDown && rightButtonPressed) {
+            releaseRightButton();
+        }
+    }
+
+    private static void releaseRightButton() {
+        if (rightButtonPressed && currentCursor != null && currentCursor.screenData != null) {
+            ScreenInput.click(currentCursor.screenData, currentCursor.pos, currentCursor.side,
+                    currentCursor.pixelX, currentCursor.pixelY, 1, true, 1);
+        }
+        rightButtonPressed = false;
+    }
+
     private static void releaseLeftButton() {
         if (leftButtonPressed && currentCursor != null && currentCursor.screenData != null) {
-            MCEFHelper.sendMouseClick(currentCursor.screenData.browser, currentCursor.pixelX, currentCursor.pixelY, 0, true, 1);
+            ScreenInput.click(currentCursor.screenData, currentCursor.pos, currentCursor.side, currentCursor.pixelX, currentCursor.pixelY, 0, true, 1);
         }
         leftButtonPressed = false;
     }
@@ -264,12 +346,12 @@ public class ScreenCursorTracker {
         if (!cursorVisible) return;
         if (currentCursor == null || currentCursor.screenData == null || currentCursor.screenData.browser == null) return;
         Minecraft mc = Minecraft.getInstance();
-        if (currentCursor.screenData.hybridMode && !isOwner(mc, currentCursor.screenData)) return;
+        if (!ScreenInput.canControl(currentCursor.screenData)) return;
         if (mc.player == null) return;
 
         if (mc.player.isShiftKeyDown()) {
-            MCEFHelper.sendMouseWheel(currentCursor.screenData.browser, currentCursor.pixelX, currentCursor.pixelY, -delta * 4, 0);
-        } else if (net.minecraft.client.gui.screens.Screen.hasControlDown()) {
+            ScreenInput.wheel(currentCursor.screenData, currentCursor.pos, currentCursor.side, currentCursor.pixelX, currentCursor.pixelY, -delta * 4);
+        } else if (net.minecraft.client.gui.screens.Screen.hasControlDown() && !ScreenInput.isRemote(currentCursor.screenData)) {
             // Ctrl + scroll: zoom browser page
             adjustZoom(currentCursor.screenData, delta > 0 ? 0.1 : -0.1);
         }
@@ -277,9 +359,13 @@ public class ScreenCursorTracker {
 
     public static void clear() {
         if (leftButtonPressed) releaseLeftButton();
+        if (rightButtonPressed) releaseRightButton();
         if (currentCursor != null) sendMouseLeave(Minecraft.getInstance());
         currentCursor = null;
+        aimedCursor = null;
+        cursorVisible = true;
         leftButtonPressed = false;
+        rightButtonPressed = false;
         wasAttackDown = false;
         lastMoveTime = 0;
         lastYaw = Double.NaN;
@@ -293,6 +379,6 @@ public class ScreenCursorTracker {
 
     private static void sendMouseLeave(Minecraft mc) {
         if (currentCursor == null || currentCursor.screenData == null) return;
-        MCEFHelper.sendMouseMove(currentCursor.screenData.browser, -1, -1, true);
+        ScreenInput.mouseMove(currentCursor.screenData, currentCursor.pos, currentCursor.side, -1, -1, true);
     }
 }

@@ -297,7 +297,17 @@ public class MCEFHelper {
         }
     }
 
+    /** OSR browsers drop key events unless focused; remote typing arrives while nobody clicked the page locally. */
+    private static void focus(Object browser) {
+        try {
+            Method setFocus = findCachedMethod(browser.getClass(), "setFocus", boolean.class);
+            if (setFocus != null) setFocus.invoke(browser, true);
+        } catch (Exception ignored) {
+        }
+    }
+
     public static void sendKeyEvent(Object browser, char c) {
+        focus(browser);
         try {
             Method keyMethod = findCachedMethod(browser.getClass(), "sendKeyTyped", char.class, int.class);
             if (keyMethod != null) keyMethod.invoke(browser, c, 0);
@@ -307,6 +317,7 @@ public class MCEFHelper {
     }
 
     public static void sendKeyPress(Object browser, int keyCode, long scanCode, int modifiers) {
+        focus(browser);
         try {
             int vkCode = glfwToVk(keyCode);
             Method method = findCachedMethod(browser.getClass(), "sendKeyPress", int.class, int.class, int.class);

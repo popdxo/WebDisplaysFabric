@@ -35,7 +35,6 @@ import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 public class ClientInit implements ClientModInitializer {
 
     private static int previousHotbarSlot = -1;
-    private static boolean wasTabDown = false;
     private static long lastUrlCheckTime = 0;
     private static final long URL_CHECK_INTERVAL_MS = 100;
     private static long lastAudioUpdateTime = 0;
@@ -55,6 +54,12 @@ public class ClientInit implements ClientModInitializer {
 
     private record PendingHybridViewer(BlockPos pos, BlockSide side, String sessionId, String token, String baseUrl,
                                        long expiresAt) {}
+
+    /** Why the keyboard can't be used: it follows the mouse's permissions. */
+    private static String keyboardDeniedMessage(ScreenData data) {
+        if (data.hybridMode) return "You need this display's linked mouse (its remote) in your inventory to type.";
+        return "This display is view-only.";
+    }
 
     public static void sendHybridSignal(BlockPos pos, int sideId, String sessionId, String peerId, String json) {
         net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -159,6 +164,33 @@ public class ClientInit implements ClientModInitializer {
                     Log.info("Closed all WebDisplays browsers after disconnect");
                 }));
 
+        ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.DISPLAY_MOVED,
+                (client, handler, buf, responseSender) -> {
+                    BlockPos from = buf.readBlockPos();
+                    BlockPos to = buf.readBlockPos();
+                    BlockSide side = BlockSide.fromInt(buf.readVarInt());
+                    client.execute(() -> {
+                        if (client.level != null
+                                && client.level.getBlockEntity(from) instanceof ScreenBlockEntity source
+                                && client.level.getBlockEntity(to) instanceof ScreenBlockEntity target
+                                && target.getScreen(side) == null) {
+                            ScreenData moved = source.detachScreen(side);
+                            if (moved != null) target.attachScreen(moved);
+                        }
+                    });
+                });
+        ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.REMOTE_INPUT,
+                (client, handler, buf, responseSender) -> {
+                    BlockPos displayPos = buf.readBlockPos();
+                    int sideOrdinal = buf.readVarInt();
+                    String event = buf.readUtf(2100);
+                    client.execute(() -> {
+                        if (client.level != null && client.level.getBlockEntity(displayPos) instanceof ScreenBlockEntity screen) {
+                            ScreenData data = screen.getScreen(BlockSide.fromInt(sideOrdinal));
+                            if (data != null) ScreenInput.applyRemote(data, event);
+                        }
+                    });
+                });
         ClientPlayNetworking.registerGlobalReceiver(ScreenActionPayload.HYBRID_SIGNAL,
                 (client, handler, buf, responseSender) -> {
                     BlockPos displayPos = buf.readBlockPos();
@@ -191,6 +223,7 @@ public class ClientInit implements ClientModInitializer {
                 (client, handler, buf, responseSender) -> {
                     BlockPos displayPos = buf.readBlockPos();
                     int sideOrdinal = buf.readVarInt();
+                    java.util.UUID cursorOwner = buf.readUUID();
                     boolean visible = buf.readBoolean();
                     float x = buf.readFloat(), y = buf.readFloat(), z = buf.readFloat();
                     client.execute(() -> {
@@ -198,11 +231,12 @@ public class ClientInit implements ClientModInitializer {
                         if (client.level.getBlockEntity(displayPos) instanceof ScreenBlockEntity screen) {
                             ScreenData data = screen.getScreen(BlockSide.fromInt(sideOrdinal));
                             if (data == null) return;
-                            data.remoteCursorVisible = visible;
-                            data.remoteCursorX = x;
-                            data.remoteCursorY = y;
-                            data.remoteCursorZ = z;
-                            data.remoteCursorAt = System.currentTimeMillis();
+                            if (visible) {
+                                data.remoteCursors.put(cursorOwner,
+                                        new ScreenData.RemoteCursor(x, y, z, System.currentTimeMillis()));
+                            } else {
+                                data.remoteCursors.remove(cursorOwner);
+                            }
                         }
                     });
                 });
@@ -456,6 +490,20 @@ public class ClientInit implements ClientModInitializer {
         WorldRenderEvents.START.register(context -> {
             Minecraft client = Minecraft.getInstance();
             if (client.level == null || client.player == null) return;
+            if (client.options.getCameraType().isFirstPerson()) {
+                // Unproject the screen centre through projection (which includes view bobbing) x camera rotation,
+                // so the display cursor sits exactly under the crosshair while walking.
+                org.joml.Matrix4f inverse = new org.joml.Matrix4f(context.projectionMatrix())
+                        .mul(context.matrixStack().last().pose()).invert();
+                org.joml.Vector4f near = inverse.transform(new org.joml.Vector4f(0, 0, -1, 1));
+                org.joml.Vector4f far = inverse.transform(new org.joml.Vector4f(0, 0, 1, 1));
+                near.div(near.w);
+                far.div(far.w);
+                Vec3 direction = new Vec3(far.x - near.x, far.y - near.y, far.z - near.z);
+                if (direction.lengthSqr() > 1e-12) {
+                    ScreenCursorTracker.setRenderRay(context.camera().getPosition(), direction.normalize());
+                }
+            }
             ScreenCursorTracker.update(client);
         });
 
@@ -497,17 +545,23 @@ public class ClientInit implements ClientModInitializer {
         ClientTickEvents.START_CLIENT_TICK.register(client -> {
             if (client.level == null || client.player == null) return;
             ScreenCursorTracker.handleLeftClick(client);
+            ScreenCursorTracker.handleRightClick(client);
 
             boolean useDown = client.options.keyUse.isDown();
             if (useDown && !wasUseDown && !client.player.isShiftKeyDown()
                     && (client.player.getItemInHand(InteractionHand.MAIN_HAND).getItem() == WDRegistries.KEYBOARD_ITEM
                     || client.player.getItemInHand(InteractionHand.OFF_HAND).getItem() == WDRegistries.KEYBOARD_ITEM)) {
-                ScreenCursorTracker.CursorInfo cursor = ScreenCursorTracker.getCurrentCursor();
-                if (cursor != null && cursor.screenData != null && (!cursor.screenData.hybridMode
-                        || (cursor.screenData.ownerUuid != null
-                            ? client.player.getUUID().toString().equals(cursor.screenData.ownerUuid)
-                            : client.player.getGameProfile().getName().equals(cursor.screenData.owner)))) {
-                    openKeyboardInput(cursor.pos, cursor.side, client.player);
+                // Right-click with the mouse item belongs to the page; otherwise the keyboard opens input.
+                ScreenCursorTracker.CursorInfo cursor = ScreenCursorTracker.getAimedCursor();
+                boolean keyboardInMainHand = client.player.getItemInHand(InteractionHand.MAIN_HAND).getItem() == WDRegistries.KEYBOARD_ITEM;
+                if ((keyboardInMainHand || !ScreenCursorTracker.isScreenFocused()) && cursor != null
+                        && cursor.screenData != null) {
+                    if (ScreenInput.canType(cursor.screenData)) {
+                        openKeyboardInput(cursor.pos, cursor.side, client.player);
+                    } else {
+                        client.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                                keyboardDeniedMessage(cursor.screenData)), true);
+                    }
                 }
             }
             wasUseDown = useDown;
@@ -554,16 +608,9 @@ public class ClientInit implements ClientModInitializer {
             }
         });
 
-        // Toggle cursor visibility with Tab key
-        ClientTickEvents.START_CLIENT_TICK.register(client -> {
-            if (client.level == null || client.player == null) return;
-            boolean isTabDown = com.mojang.blaze3d.platform.InputConstants.isKeyDown(
-                    client.getWindow().getWindow(), com.mojang.blaze3d.platform.InputConstants.KEY_TAB);
-            if (isTabDown && !wasTabDown) {
-                ScreenCursorTracker.toggleCursorVisible();
-            }
-            wasTabDown = isTabDown;
-        });
+        // (Removed: a raw Tab-key toggle that silently disabled all display interaction. Tab is also the player
+        // list key and was read even while typing in chat; the static flag survived rejoining, so only a game
+        // restart recovered. Holding the mouse item now decides when the cursor is active.)
 
         // Toggle MCEF screen rendering with F6 key
         ClientTickEvents.START_CLIENT_TICK.register(client -> {
@@ -588,7 +635,8 @@ public class ClientInit implements ClientModInitializer {
                 if (world.isClientSide()) ScreenCursorTracker.update(Minecraft.getInstance());
             }
             if (player.getItemInHand(hand).getItem() == WDRegistries.LINKER) return InteractionResult.PASS;
-            return ScreenCursorTracker.isScreenFocused() ? InteractionResult.FAIL : InteractionResult.PASS;
+            return ScreenCursorTracker.isScreenFocused() && player.getItemInHand(hand).getItem() != WDRegistries.MOUSE_ITEM
+                    ? InteractionResult.FAIL : InteractionResult.PASS;
         });
 
         // Prevent right-clicking blocks behind/under the active display surface. Keep the
@@ -603,16 +651,16 @@ public class ClientInit implements ClientModInitializer {
             BlockEntity be = world.getBlockEntity(hitResult.getBlockPos());
             if (be instanceof ScreenBlockEntity screen) {
                 if (player.getItemInHand(hand).getItem() == WDRegistries.CONFIGURATOR) {
-                    BlockPos pos = hitResult.getBlockPos();
                     BlockSide side = BlockSide.fromDirection(hitResult.getDirection());
-                    ScreenData configured = screen.getScreen(side);
+                    ScreenBlockEntity covering = ScreenBlockEntity.findCovering(world, hitResult.getBlockPos(), side);
+                    BlockPos pos = covering != null ? covering.getBlockPos() : hitResult.getBlockPos();
+                    ScreenData configured = covering != null ? covering.getScreen(side) : null;
                     if (configured != null && !MCEFHelper.isLocalPlayerOwner(configured.owner, configured.ownerUuid)) {
                         // The server hands the display over only if it has no (online) owner.
                         ClientPlayNetworking.send(new net.minecraft.resources.ResourceLocation("webdisplays", "screen_action"),
                                 ScreenActionPayload.claimOwner(pos, side.id).toPacket());
                     }
-                    Minecraft.getInstance().setScreen(
-                            new GuiScreenConfig(pos, side, !screen.hasScreen(side)));
+                    Minecraft.getInstance().setScreen(new GuiScreenConfig(pos, side, covering == null));
                     return InteractionResult.SUCCESS;
                 }
             }
@@ -620,7 +668,8 @@ public class ClientInit implements ClientModInitializer {
                     && player.isShiftKeyDown()) {
                 return InteractionResult.PASS;
             }
-            return ScreenCursorTracker.isScreenFocused() ? InteractionResult.FAIL : InteractionResult.PASS;
+            return ScreenCursorTracker.isScreenFocused() && player.getItemInHand(hand).getItem() != WDRegistries.MOUSE_ITEM
+                    ? InteractionResult.FAIL : InteractionResult.PASS;
         });
 
 
@@ -638,12 +687,9 @@ public class ClientInit implements ClientModInitializer {
                     BlockEntity linkedEntity = mc.level == null ? null : mc.level.getBlockEntity(screenPos);
                     if (linkedEntity instanceof ScreenBlockEntity linkedScreen) {
                         ScreenData linkedData = linkedScreen.getScreen(screenSide);
-                        if (linkedData != null && linkedData.hybridMode
-                                && (linkedData.ownerUuid != null
-                                    ? !mc.player.getUUID().toString().equals(linkedData.ownerUuid)
-                                    : !mc.player.getGameProfile().getName().equals(linkedData.owner))) {
+                        if (linkedData != null && !ScreenInput.canType(linkedData)) {
                             player.displayClientMessage(net.minecraft.network.chat.Component.literal(
-                                    "Only the display owner can use this Hybrid display."), true);
+                                    keyboardDeniedMessage(linkedData)), true);
                             return InteractionResult.SUCCESS;
                         }
                     }
@@ -660,7 +706,8 @@ public class ClientInit implements ClientModInitializer {
                     return InteractionResult.SUCCESS;
                 }
             }
-            return ScreenCursorTracker.isScreenFocused() ? InteractionResult.FAIL : InteractionResult.PASS;
+            return ScreenCursorTracker.isScreenFocused() && player.getItemInHand(hand).getItem() != WDRegistries.MOUSE_ITEM
+                    ? InteractionResult.FAIL : InteractionResult.PASS;
         });
 
         Log.info("WebDisplays client initialized!");

@@ -5,7 +5,8 @@
   "compatibilityLevel": "JAVA_17",
   "client": [
     "PixelStoreResetMixin",
-    "MCEFBrowserPaintMixin"
+    "MCEFBrowserPaintMixin",
+    "MinecraftAttackMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -3,6 +3,7 @@
   "block.webdisplays.screen": "Web Screen",
   "block.webdisplays.kb_left": "Keyboard (Left)",
   "block.webdisplays.kb_right": "Keyboard (Right)",
+  "item.webdisplays.mouse": "Mouse",
   "item.webdisplays.keyboard": "Keyboard",
   "item.webdisplays.screencfg": "Screen Configurator",
   "item.webdisplays.linker": "Linking Tool",

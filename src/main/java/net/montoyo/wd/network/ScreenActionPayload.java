@@ -37,6 +37,10 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
     public static final String ACTION_SET_AUTO_RESOLUTION = "set_auto_resolution";
     public static final String ACTION_SET_DISPLAY_SIZE = "set_display_size";
     public static final String ACTION_SET_MODE = "set_mode"; // "sync" | "solo" | "hybrid"
+    public static final String ACTION_SET_VIEW_ONLY = "set_view_only";
+    public static final String ACTION_UNLINK_REMOTE = "unlink_remote";
+    /** A viewer's mouse/keyboard event for a Hybrid display, forwarded to the owner's browser. */
+    public static final String ACTION_REMOTE_INPUT = "remote_input";
     public static final String ACTION_CURSOR = "cursor"; // "x,y,z" block-local hit position, or "off"
     public static final String ACTION_CLAIM_OWNER = "claim_owner";
     public static final String ACTION_REQUEST_HYBRID_VIEW = "request_hybrid_view";
@@ -46,6 +50,8 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
     public static final ResourceLocation BOOKMARK_SYNC = new ResourceLocation("webdisplays", "bookmark_sync");
     /** Hybrid WebRTC signaling relayed through the server (both directions). */
     public static final ResourceLocation HYBRID_SIGNAL = new ResourceLocation("webdisplays", "hybrid_signal");
+    public static final ResourceLocation DISPLAY_MOVED = new ResourceLocation("webdisplays", "display_moved");
+    public static final ResourceLocation REMOTE_INPUT = new ResourceLocation("webdisplays", "remote_input");
     public static final ResourceLocation CURSOR_SYNC = new ResourceLocation("webdisplays", "cursor_sync");
     public static final ResourceLocation HYBRID_SESSION = new ResourceLocation("webdisplays", "hybrid_session");
     public static final ResourceLocation HYBRID_VIEWER_SESSION = new ResourceLocation("webdisplays", "hybrid_viewer_session");
@@ -111,6 +117,18 @@ public record ScreenActionPayload(BlockPos pos, int sideOrdinal, String action, 
     public static ScreenActionPayload cursor(BlockPos pos, int sideOrdinal, boolean visible, double x, double y, double z) {
         return new ScreenActionPayload(pos, sideOrdinal, ACTION_CURSOR,
                 visible ? String.format(java.util.Locale.ROOT, "%.4f,%.4f,%.4f", x, y, z) : "off");
+    }
+
+    public static ScreenActionPayload setViewOnly(BlockPos pos, int sideOrdinal, boolean viewOnly) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_SET_VIEW_ONLY, Boolean.toString(viewOnly));
+    }
+
+    public static ScreenActionPayload unlinkRemote(BlockPos pos, int sideOrdinal) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_UNLINK_REMOTE, "");
+    }
+
+    public static ScreenActionPayload remoteInput(BlockPos pos, int sideOrdinal, String event) {
+        return new ScreenActionPayload(pos, sideOrdinal, ACTION_REMOTE_INPUT, event);
     }
 
     public static ScreenActionPayload claimOwner(BlockPos pos, int sideOrdinal) {

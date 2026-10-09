@@ -62,9 +62,9 @@ public class GuiScreenConfig extends Screen {
             row += 23;
         }
 
-        widthInput = numberField(cx - 94, row, 92, screen != null ? screen.size.x : 2, 3);
+        widthInput = numberField(cx - 94, row, 92, screen != null ? screen.imageWidthBlocks() : 2, 3);
         addRenderableWidget(widthInput);
-        heightInput = numberField(cx + 3, row, 91, screen != null ? screen.size.y : 2, 3);
+        heightInput = numberField(cx + 3, row, 91, screen != null ? screen.imageHeightBlocks() : 2, 3);
         addRenderableWidget(heightInput);
 
         if (!isNew) {
@@ -81,18 +81,35 @@ public class GuiScreenConfig extends Screen {
 
             row += 23;
             addRenderableWidget(Button.builder(Component.literal("Mode: " + modeLabel(screen)),
-                    this::cycleMode).bounds(cx - 95, row, 190, 20).build());
+                    this::cycleMode).bounds(cx - 95, row, 94, 20).build());
+            shownHybrid = screen.hybridMode;
+            shownRemoteLink = screen.remoteLinkId;
+            if (screen.hybridMode) {
+                // Hybrid: control belongs to whoever holds the linked mouse.
+                Button remoteButton = Button.builder(Component.literal(screen.remoteLinkId != null ? "Unlink Remote" : "No Remote"),
+                        b -> unlinkRemote()).bounds(cx + 1, row, 94, 20).build();
+                remoteButton.active = isDisplayOwner(screen) && screen.remoteLinkId != null;
+                remoteButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.literal(
+                        "In Hybrid mode only the holder of the linked mouse can control this display, owner included. "
+                                + "Link one by using a mouse on the display.")));
+                addRenderableWidget(remoteButton);
+            } else {
+                Button usersButton = Button.builder(Component.literal(usersLabel(screen.viewOnly)), this::toggleViewOnly)
+                        .bounds(cx + 1, row, 94, 20).build();
+                usersButton.active = isDisplayOwner(screen);
+                usersButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.literal(
+                        "Whether other players can click, type and navigate on this display or only watch it. "
+                                + "Solo displays are always free to use.")));
+                addRenderableWidget(usersButton);
+            }
 
             row += 23;
             addRenderableWidget(Button.builder(Component.literal("Apply"), b -> applySettings())
                     .bounds(cx - 95, row, 190, 20).build());
 
             row += 23;
-            addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.seturl"),
-                    b -> Minecraft.getInstance().setScreen(new GuiSetURL(blockPos, side)))
-                    .bounds(cx - 95, row, 93, 20).build());
             addRenderableWidget(Button.builder(Component.literal("Remove Display"), b -> removeDisplay())
-                    .bounds(cx + 1, row, 94, 20).build());
+                    .bounds(cx - 95, row, 190, 20).build());
 
             row += 23;
             addRenderableWidget(Button.builder(Component.translatable("webdisplays.gui.screencfg.rot0"),
@@ -142,36 +159,39 @@ public class GuiScreenConfig extends Screen {
     private void createScreen() {
         int blocksWide = Math.max(1, Math.min(100, parse(widthInput, 2)));
         int blocksHigh = Math.max(1, Math.min(100, parse(heightInput, 2)));
-        ScreenBlockEntity be = getBlockEntity();
-        if (be == null || !be.canFitScreen(side, blocksWide, blocksHigh)) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+        net.minecraft.core.Direction facing = mc.player.getDirection();
+        ScreenBlockEntity.Placement placement = ScreenBlockEntity.placement(blockPos, side, blocksWide, blocksHigh, facing);
+        if (!(mc.level.getBlockEntity(placement.anchor()) instanceof ScreenBlockEntity anchor)
+                || !anchor.canFitScreen(side, placement.sizeX(), placement.sizeY())) {
             showFitError();
             return;
         }
-        String owner = Minecraft.getInstance().player != null
-                ? Minecraft.getInstance().player.getName().getString() : "unknown";
-        Vector2i size = new Vector2i(blocksWide, blocksHigh);
-        Vector2i resolution = new Vector2i(blocksWide * 320, blocksHigh * 320);
-        if (!be.addScreen(side, resolution, size, owner)) return;
+        // The server creates the display (possibly on another anchor block) and syncs it back.
         ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
                 new ScreenActionPayload(blockPos, side.id, ScreenActionPayload.ACTION_ADD_SCREEN,
-                        blocksWide + "," + blocksHigh).toPacket());
+                        blocksWide + "," + blocksHigh + "," + facing.get2DDataValue()).toPacket());
         onClose();
     }
 
     private void applySettings() {
         ScreenBlockEntity be = getBlockEntity();
         if (be == null || screen == null) return;
-        int blocksWide = Math.max(1, Math.min(100, parse(widthInput, screen.size.x)));
-        int blocksHigh = Math.max(1, Math.min(100, parse(heightInput, screen.size.y)));
+        int blocksWide = Math.max(1, Math.min(100, parse(widthInput, screen.imageWidthBlocks())));
+        int blocksHigh = Math.max(1, Math.min(100, parse(heightInput, screen.imageHeightBlocks())));
+        boolean swapped = screen.axesSwapped();
         int resolutionWidth = Math.max(64, Math.min(32000, parse(resolutionWidthInput, screen.resolution.x)));
         int resolutionHeight = Math.max(64, Math.min(32000, parse(resolutionHeightInput, screen.resolution.y)));
         int requiredWidth = Math.max(blocksWide, (int) Math.ceil(resolutionWidth / 320.0));
         int requiredHeight = Math.max(blocksHigh, (int) Math.ceil(resolutionHeight / 320.0));
-        if (!be.canFitScreen(side, requiredWidth, requiredHeight)) {
+        if (!be.canFitScreen(side, swapped ? requiredHeight : requiredWidth, swapped ? requiredWidth : requiredHeight)) {
             showFitError();
             return;
         }
-        if (!be.setDisplaySize(side, blocksWide, blocksHigh)) {
+        int storedWidth = swapped ? blocksHigh : blocksWide;
+        int storedHeight = swapped ? blocksWide : blocksHigh;
+        if (!be.setDisplaySize(side, storedWidth, storedHeight)) {
             showFitError();
             return;
         }
@@ -185,7 +205,7 @@ public class GuiScreenConfig extends Screen {
                     ScreenActionPayload.setResolution(blockPos, side.id, resolutionWidth, fixedHeight).toPacket());
         }
         ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
-                ScreenActionPayload.setDisplaySize(blockPos, side.id, blocksWide, blocksHigh).toPacket());
+                ScreenActionPayload.setDisplaySize(blockPos, side.id, storedWidth, storedHeight).toPacket());
         onClose();
     }
 
@@ -202,6 +222,37 @@ public class GuiScreenConfig extends Screen {
                 ScreenActionPayload.setAutoResolution(blockPos, side.id, screen.autoResolution).toPacket());
         button.setMessage(Component.literal("Resolution: " + (screen.autoResolution ? "Auto" : "Manual")));
         if (resolutionWidthInput != null) resolutionWidthInput.active = !screen.autoResolution;
+    }
+
+    private boolean shownHybrid;
+    private String shownRemoteLink;
+
+    /** Mode and remote link change via server updates; refresh the buttons when they do. */
+    @Override
+    public void tick() {
+        super.tick();
+        if (!isNew && screen != null && (screen.hybridMode != shownHybrid
+                || !java.util.Objects.equals(screen.remoteLinkId, shownRemoteLink))) {
+            rebuildWidgets();
+        }
+    }
+
+    private void unlinkRemote() {
+        if (screen == null || !isDisplayOwner(screen)) return;
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.unlinkRemote(blockPos, side.id).toPacket());
+    }
+
+    private static String usersLabel(boolean viewOnly) {
+        return viewOnly ? "Others: View only" : "Others: Control";
+    }
+
+    private void toggleViewOnly(Button button) {
+        if (screen == null || !isDisplayOwner(screen)) return;
+        boolean requested = !screen.viewOnly;
+        ClientPlayNetworking.send(new ResourceLocation("webdisplays", "screen_action"),
+                ScreenActionPayload.setViewOnly(blockPos, side.id, requested).toPacket());
+        button.setMessage(Component.literal(usersLabel(requested)));
     }
 
     private static String modeLabel(ScreenData data) {

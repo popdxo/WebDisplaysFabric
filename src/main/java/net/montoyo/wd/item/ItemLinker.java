@@ -24,6 +24,9 @@ public class ItemLinker extends Item {
     }
 
     public static void onRightClickScreen(Player player, BlockPos screenPos, BlockSide side) {
+        net.montoyo.wd.entity.ScreenBlockEntity covering =
+                net.montoyo.wd.entity.ScreenBlockEntity.findCovering(player.level(), screenPos, side);
+        if (covering != null) screenPos = covering.getBlockPos();
         UUID playerUUID = player.getUUID();
         linkedScreens.put(playerUUID, new LinkData(screenPos, side));
         player.displayClientMessage(

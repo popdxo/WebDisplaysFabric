@@ -23,10 +23,16 @@ public class ScreenData {
     public boolean hybridMode;
     /** Solo: every player uses their own browser on this display; nothing is synced or permission-gated. */
     public boolean soloMode;
-    /** Hybrid viewers: where the owner's cursor currently is on this display (block-local hit coordinates). */
-    public boolean remoteCursorVisible;
-    public float remoteCursorX, remoteCursorY, remoteCursorZ;
-    public long remoteCursorAt;
+    /** Other players may only watch (no clicks, keys or navigation). Owners and Solo displays are unaffected. */
+    public boolean viewOnly;
+    /** Hybrid: id of the one mouse item allowed to control this display (null = none linked). */
+    public String remoteLinkId;
+    /** Floor/ceiling displays: the world direction the top of the picture points to (set from the creator's facing). */
+    public net.minecraft.core.Direction upDir = net.minecraft.core.Direction.NORTH;
+    /** Other players' cursors on this display (block-local hit coordinates), keyed by player UUID. */
+    public final java.util.Map<java.util.UUID, RemoteCursor> remoteCursors = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public record RemoteCursor(float x, float y, float z, long receivedAt) {}
     public long hybridSeenAt;
     public long lastHybridRequestAt;
     public String hybridSessionId;
@@ -71,6 +77,21 @@ public class ScreenData {
         this.mouseType = 0;
         this.browser = null;
         this.lastClickTime = 0;
+    }
+
+    /** Floor/ceiling displays facing east/west store their picture width along z (size.y). */
+    public boolean axesSwapped() {
+        return (side == BlockSide.TOP || side == BlockSide.BOTTOM) && upDir.getAxis() == net.minecraft.core.Direction.Axis.X;
+    }
+
+    /** Picture width in blocks, as the viewer sees it. */
+    public int imageWidthBlocks() {
+        return axesSwapped() ? size.y : size.x;
+    }
+
+    /** Picture height in blocks, as the viewer sees it. */
+    public int imageHeightBlocks() {
+        return axesSwapped() ? size.x : size.y;
     }
 
     public boolean isLoaded() {
